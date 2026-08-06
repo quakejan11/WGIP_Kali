@@ -1,0 +1,207 @@
+================================================================================
+              WGIP - KALI LINUX SETUP COMMANDS
+              Complete step-by-step installation guide
+================================================================================
+
+===============================================================================
+PART 1: INSTALL SYSTEM DEPENDENCIES
+===============================================================================
+
+# Update package list
+sudo apt update
+
+# Install Git, Python, Node.js, PostgreSQL, and PostGIS
+sudo apt install -y git python3 python3-pip python3-venv postgresql postgresql-contrib postgis nodejs npm
+
+# Start PostgreSQL and enable it to run on boot
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+# Verify installations
+git --version
+python3 --version
+node --version
+npm --version
+sudo systemctl status postgresql
+
+
+===============================================================================
+PART 2: SET UP POSTGRESQL DATABASE
+===============================================================================
+
+# Set password for postgres user (REMEMBER THIS PASSWORD!)
+# CHANGE 'your_secure_password' to something you'll remember!
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'your_secure_password';"
+
+# Create the database
+sudo -u postgres psql -c "CREATE DATABASE postgis_wgip;"
+
+# Enable PostGIS extension
+sudo -u postgres psql -d postgis_wgip -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+
+# Verify PostGIS is working
+sudo -u postgres psql -d postgis_wgip -c "SELECT postgis_full_version();"
+
+
+===============================================================================
+PART 3: CLONE OR NAVIGATE TO PROJECT
+===============================================================================
+
+# Option A: Clone the repository (if you don't have the files)
+cd ~
+git clone https://github.com/katherinekeithcabrera-cell/WGIP.git
+cd WGIP
+
+# Option B: If you already have unzipped files
+# cd ~/WGIP-main   (adjust path as needed)
+# or
+# cd ~/Downloads/WGIP
+
+
+===============================================================================
+PART 4: BACKEND SETUP
+===============================================================================
+
+# Navigate to backend folder
+cd backend
+
+# Create Python virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Install required packages
+pip install -r requirements.txt
+
+# If requirements.txt is missing, install manually:
+# pip install fastapi uvicorn sqlalchemy alembic psycopg2-binary geoalchemy2 pydantic pandas python-multipart reportlab python-dotenv
+
+# Create .env file with database credentials
+# IMPORTANT: Replace 'your_secure_password' with the actual password you set!
+cat > .env << 'EOF'
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=postgis_wgip
+DB_USER=postgres
+DB_PASSWORD=your_secure_password
+EOF
+
+# Run database migrations
+python -m alembic upgrade head
+
+
+===============================================================================
+PART 5: FRONTEND SETUP (Open a NEW terminal)
+===============================================================================
+
+# Navigate to frontend folder
+cd ~/WGIP/frontend
+
+# Install frontend dependencies
+npm install
+
+# If npm install fails, try:
+# npm install @mui/material @mui/icons-material @emotion/react @emotion/styled react-router-dom axios leaflet react-leaflet @mui/x-data-grid
+
+
+===============================================================================
+PART 6: START THE SYSTEM (Two Terminals)
+===============================================================================
+
+--- TERMINAL 1 - BACKEND ---
+cd ~/WGIP/backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload
+
+--- TERMINAL 2 - FRONTEND ---
+cd ~/WGIP/frontend
+npm run dev
+
+--- BROWSER ---
+http://localhost:5173/
+
+
+===============================================================================
+QUICK HEALTH CHECKS
+===============================================================================
+
+# Check if backend is running
+curl http://127.0.0.1:8000/docs
+
+# Check if PostgreSQL is running
+sudo systemctl status postgresql
+
+# Check if ports are in use
+ss -tlnp | grep -E '8000|5173'
+
+# Restart PostgreSQL if needed
+sudo systemctl restart postgresql
+
+
+===============================================================================
+DAILY STARTUP COMMANDS (After Initial Setup)
+===============================================================================
+
+--- TERMINAL 1 - BACKEND ---
+cd ~/WGIP/backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload
+
+--- TERMINAL 2 - FRONTEND ---
+cd ~/WGIP/frontend
+npm run dev
+
+--- BROWSER ---
+http://localhost:5173/
+
+--- STOP SERVERS ---
+Press CTRL + C in each terminal
+
+
+===============================================================================
+TROUBLESHOOTING COMMANDS
+===============================================================================
+
+# If port 8000 is in use, use a different port:
+python -m uvicorn app.main:app --reload --port 8001
+
+# If port 5173 is in use, Vite will suggest an alternative port
+
+# To deactivate virtual environment when done:
+deactivate
+
+# If alembic is not recognized:
+pip install alembic
+python -m alembic upgrade head
+
+# If database connection fails, check PostgreSQL:
+sudo systemctl status postgresql
+sudo systemctl restart postgresql
+
+# If migrations fail, reset database:
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS postgis_wgip;"
+sudo -u postgres psql -c "CREATE DATABASE postgis_wgip;"
+sudo -u postgres psql -d postgis_wgip -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+python -m alembic upgrade head
+
+
+===============================================================================
+QUICK REFERENCE - KEY INFORMATION
+===============================================================================
+
+Backend URL          | http://127.0.0.1:8000
+Frontend URL         | http://localhost:5173/
+API Docs             | http://127.0.0.1:8000/docs
+Database Name        | postgis_wgip
+Database User        | postgres
+Database Host        | localhost
+Database Port        | 5432
+Virtual Environment  | source ~/WGIP/backend/.venv/bin/activate
+
+================================================================================
+                              END OF COMMANDS
+================================================================================

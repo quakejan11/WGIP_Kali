@@ -1,0 +1,58 @@
+[
+  {
+    "survey_id": 1,
+    "bssid": "AA:BB:CC:DD:EE:01",
+    "ssid": "Cafe_WiFi",
+    "channel": 6,
+    "client_mac": "11:22:33:44:55:66",
+    "client_vendor": "Apple",
+    "timestamp": "2026-07-06T10:00:00+08:00",
+    "latitude": 14.5995,
+    "longitude": 120.9842,
+    "signal_dbm": -58,
+    "relationship_type": "observed_association",
+    "source": "mock_kismet"
+  },
+  {
+    "survey_id": 2,
+    "bssid": "AA:BB:CC:DD:EE:01",
+    "ssid": "Cafe_WiFi",
+    "channel": 6,
+    "client_mac": "11:22:33:44:55:66",
+    "client_vendor": "Apple",
+    "timestamp": "2026-07-06T15:30:00+08:00",
+    "latitude": 14.6042,
+    "longitude": 120.9821,
+    "signal_dbm": -64,
+    "relationship_type": "observed_association",
+    "source": "mock_kismet"
+  },
+  {
+    "survey_id": 2,
+    "bssid": "BB:CC:DD:EE:FF:02",
+    "ssid": "Office_WiFi",
+    "channel": 11,
+    "client_mac": "11:22:33:44:55:66",
+    "client_vendor": "Apple",
+    "timestamp": "2026-07-06T16:10:00+08:00",
+    "latitude": 14.6048,
+    "longitude": 120.9817,
+    "signal_dbm": -71,
+    "relationship_type": "observed_association",
+    "source": "mock_kismet"
+  },
+  {
+    "survey_id": 2,
+    "bssid": "AA:BB:CC:DD:EE:01",
+    "ssid": "Cafe_WiFi",
+    "channel": 6,
+    "client_mac": "22:33:44:55:66:77",
+    "client_vendor": "Samsung",
+    "timestamp": "2026-07-06T16:20:00+08:00",
+    "latitude": 14.6042,
+    "longitude": 120.9821,
+    "signal_dbm": -69,
+    "relationship_type": "observed_association",
+    "source": "mock_kismet"
+  }
+]

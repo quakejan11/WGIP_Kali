@@ -1,0 +1,4 @@
+bssid,ssid,client_mac,client_vendor,channel,signal_dbm,timestamp
+AA:BB:CC:DD:EE:01,Cubao_WiFi,11:22:33:44:55:66,Apple,6,-45,2026-07-06T10:00:00+08:00
+AA:BB:CC:DD:EE:01,Cubao_WiFi,22:33:44:55:66:77,Samsung,6,-50,2026-07-06T10:05:00+08:00
+AA:BB:CC:DD:EE:02,Cubao_Guest,33:44:55:66:77:88,Xiaomi,11,-61,2026-07-06T10:10:00+08:00

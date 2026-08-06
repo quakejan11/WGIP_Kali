@@ -1,0 +1,29 @@
+[
+  {
+    "bssid": "AA:BB:CC:DD:EE:01",
+    "ssid": "HomeWiFi",
+    "rssi": -40,
+    "channel": 6,
+    "latitude": 14.5995,
+    "longitude": 120.9842,
+    "encryption": "WPA2"
+  },
+  {
+    "bssid": "AA:BB:CC:DD:EE:02",
+    "ssid": "CafeWiFi",
+    "rssi": -67,
+    "channel": 11,
+    "latitude": 14.6001,
+    "longitude": 120.9850,
+    "encryption": "Open"
+  },
+  {
+    "bssid": "AA:BB:CC:DD:EE:03",
+    "ssid": "Unknown",
+    "rssi": -80,
+    "channel": 1,
+    "latitude": 14.6010,
+    "longitude": 120.9860,
+    "encryption": "WPA3"
+  }
+]

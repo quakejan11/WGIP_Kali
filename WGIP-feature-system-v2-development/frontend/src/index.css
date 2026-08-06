@@ -1,0 +1,275 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f6f7fb;
+}
+
+/* WGIP compact global UI */
+.MuiCard-root {
+  border-radius: 12px !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06) !important;
+}
+
+.MuiCardContent-root {
+  padding: 10px 12px !important;
+}
+
+.MuiCardContent-root:last-child {
+  padding-bottom: 10px !important;
+}
+
+.MuiStack-root {
+  gap: 10px;
+}
+
+.MuiTypography-h4 {
+  font-size: 1.35rem !important;
+  line-height: 1.2 !important;
+}
+
+.MuiTypography-h5 {
+  font-size: 1.05rem !important;
+  line-height: 1.2 !important;
+}
+
+.MuiTypography-h6 {
+  font-size: 0.95rem !important;
+  line-height: 1.25 !important;
+}
+
+.MuiTypography-body1 {
+  font-size: 0.88rem !important;
+}
+
+.MuiTypography-body2 {
+  font-size: 0.78rem !important;
+}
+
+.MuiButton-root {
+  min-height: 32px !important;
+  padding: 5px 10px !important;
+  border-radius: 9px !important;
+  text-transform: none !important;
+  font-size: 0.78rem !important;
+}
+
+.MuiChip-root {
+  height: 24px !important;
+  border-radius: 999px !important;
+  font-size: 0.72rem !important;
+}
+
+.MuiSvgIcon-root {
+  font-size: 1.05rem !important;
+}
+
+.MuiTableCell-root {
+  padding: 6px 8px !important;
+  font-size: 0.75rem !important;
+}
+
+.MuiTableCell-head {
+  font-weight: 700 !important;
+  background: #f8fafc !important;
+}
+
+.leaflet-container {
+  border-radius: 12px;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.leaflet-popup-content {
+  margin: 10px 12px !important;
+  font-size: 12px !important;
+}
+
+.wgip-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #475569;
+}
+
+.wgip-map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.wgip-map-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid;
+  display: inline-block;
+}
+/* WGIP Leaflet layer fix:
+   Keep map popups above Wi-Fi/device dots and route markers. */
+.leaflet-popup-pane {
+  z-index: 10000 !important;
+}
+
+.leaflet-popup {
+  z-index: 10001 !important;
+}
+
+.leaflet-tooltip-pane {
+  z-index: 10002 !important;
+}
+
+.leaflet-overlay-pane {
+  z-index: 400 !important;
+}
+
+.leaflet-marker-pane {
+  z-index: 600 !important;
+}
+
+.leaflet-shadow-pane {
+  z-index: 500 !important;
+}
+
+.leaflet-control-container {
+  z-index: 10003 !important;
+}
+
+
+/* WGIP Leaflet tooltip/popup priority fix:
+   Keep hover labels and clicked popups above dense map dots. */
+.leaflet-container .leaflet-tooltip-pane {
+  z-index: 12000 !important;
+}
+
+.leaflet-container .leaflet-tooltip {
+  z-index: 12001 !important;
+  position: relative !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(15, 23, 42, 0.18) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18) !important;
+  color: #0f172a !important;
+  font-weight: 700 !important;
+  padding: 6px 10px !important;
+}
+
+.leaflet-container .leaflet-popup-pane {
+  z-index: 13000 !important;
+}
+
+.leaflet-container .leaflet-popup {
+  z-index: 13001 !important;
+}
+
+.leaflet-container .leaflet-overlay-pane {
+  z-index: 400 !important;
+}
+
+.leaflet-container .leaflet-marker-pane {
+  z-index: 500 !important;
+}
+
+.leaflet-container .leaflet-shadow-pane {
+  z-index: 300 !important;
+}
+
+
+/* WGIP Leaflet final stacking fix:
+   Popups must stay above numbered location labels, markers, dots, and tooltips. */
+.leaflet-pane.leaflet-tile-pane {
+  z-index: 100 !important;
+}
+
+.leaflet-pane.leaflet-overlay-pane {
+  z-index: 300 !important;
+}
+
+.leaflet-pane.leaflet-shadow-pane {
+  z-index: 400 !important;
+}
+
+.leaflet-pane.leaflet-marker-pane {
+  z-index: 500 !important;
+}
+
+.leaflet-pane.leaflet-tooltip-pane {
+  z-index: 600 !important;
+}
+
+.leaflet-pane.leaflet-popup-pane {
+  z-index: 99999 !important;
+}
+
+.leaflet-popup-pane,
+.leaflet-popup,
+.leaflet-popup-content-wrapper,
+.leaflet-popup-content,
+.leaflet-popup-tip-container,
+.leaflet-popup-tip {
+  z-index: 99999 !important;
+}
+
+.leaflet-marker-pane .leaflet-marker-icon,
+.leaflet-marker-pane .leaflet-div-icon,
+.leaflet-tooltip-pane .leaflet-tooltip {
+  z-index: 500 !important;
+}
+
+.leaflet-popup-content-wrapper {
+  position: relative !important;
+  background: #ffffff !important;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.28) !important;
+}
+
+
+/* WGIP map cleanup:
+   Hide floating numbered location labels to keep maps clean for stakeholder view. */
+.leaflet-div-icon,
+.leaflet-marker-icon {
+  pointer-events: auto;
+}
+
+/* Hide small numbered labels such as #1, #2, #3 when they use div icons. */
+.leaflet-div-icon:not(.leaflet-marker-icon) {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Keep popup clean and above all map points. */
+.leaflet-popup-pane {
+  z-index: 99999 !important;
+}
+
+.leaflet-popup {
+  z-index: 99999 !important;
+}
+
+
+/* WGIP Device Map popup readability:
+   Keep numbered location labels visible normally,
+   but hide them while a popup is open so they do not cover popup text. */
+.leaflet-container:has(.leaflet-popup) .leaflet-tooltip-pane {
+  display: none !important;
+}
+
+.leaflet-container .leaflet-popup-pane {
+  z-index: 99999 !important;
+}
+
+.leaflet-container .leaflet-popup,
+.leaflet-container .leaflet-popup-content-wrapper,
+.leaflet-container .leaflet-popup-content {
+  z-index: 99999 !important;
+}
+

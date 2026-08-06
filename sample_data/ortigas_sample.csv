@@ -1,0 +1,4 @@
+bssid,ssid,client_mac,client_vendor,channel,signal_dbm,timestamp
+BB:CC:DD:EE:FF:02,Ortigas_WiFi,11:22:33:44:55:66,Apple,11,-48,2026-07-06T16:10:00+08:00
+BB:CC:DD:EE:FF:02,Ortigas_WiFi,44:55:66:77:88:99,Huawei,11,-55,2026-07-06T16:15:00+08:00
+BB:CC:DD:EE:FF:03,Ortigas_Guest,55:66:77:88:99:AA,Oppo,1,-63,2026-07-06T16:20:00+08:00

@@ -1,0 +1,54 @@
+from pathlib import Path
+
+
+content = """[alembic]
+script_location = alembic
+prepend_sys_path = .
+timezone = UTC
+truncate_slug_length = 40
+revision_environment = false
+sourceless = false
+version_locations =
+output_encoding = utf-8
+
+sqlalchemy.url = postgresql+psycopg2://postgres:postgres@localhost:5432/postgis_wgip
+
+[post_write_hooks]
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+"""
+
+Path("alembic.ini").write_text(content, encoding="utf-8")
+print("SUCCESS: alembic.ini rewritten without BOM.")

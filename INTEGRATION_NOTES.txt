@@ -1,0 +1,38 @@
+Integration Steps for WGIP project (Windows updates into Kali base)
+
+Source directories:
+- Windows project: /home/enigma/Documents/WGIP-main/
+- Kali project: /home/enigma/Desktop/WGIP-main/
+Target integrated directory: /home/enigma/Desktop/Integrated/
+
+Steps performed:
+
+1. Created the integrated directory:
+   mkdir -p /home/enigma/Desktop/Integrated
+
+2. First, copied the Kali project (as base) to the integrated directory, excluding unnecessary files:
+   rsync -av --exclude='.git' --exclude='database_backup' --exclude='db_dumps' --exclude='*.kismet' /home/enigma/Desktop/WGIP-main/ /home/enigma/Desktop/Integrated/ 2>&1 | tee /home/enigma/Desktop/Integrated/rsync_kali_to_integrated.log
+
+   This copied all files from the Kali environment, excluding version control, backups, and large binary logs.
+
+3. Then, integrated updates from the Windows project, updating only files that are newer in the Windows source than in the integrated directory (preserving any newer Kali changes):
+   rsync -av --update --exclude='.git' --exclude='database_backup' --exclude='db_dumps' --exclude='*.kismet' --exclude='.venv' --exclude='node_modules' /home/enigma/Documents/WGIP-main/ /home/enigma/Desktop/Integrated/ 2>&1 | tee /home/enigma/Desktop/Integrated/rsync_windows_to_integrated.log
+
+   The --update flag ensures that files in the destination that are newer than the source are not overwritten.
+   Additional exclusions for .venv and node_modules to avoid copying large dependency directories; these should be reinstalled in the target environment as needed.
+
+4. After synchronization, the integrated directory contains the merged project.
+
+To rebuild dependencies:
+   - For backend (Python): navigate to backend/ and run `pip install -r requirements.txt` (or use the existing .venv if you copied it; but we excluded it, so recreate).
+   - For frontend (Node.js): navigate to frontend/ and run `npm install`.
+
+Notes:
+- The logs of the rsync operations are available in the integrated directory:
+    * rsync_kali_to_integrated.log
+    * rsync_windows_to_integrated.log
+- Review the logs to see which files were updated from Windows.
+- If there are any conflicts (files that were modified in both sides and Windows version is newer), the Windows version overwrote the Kali version due to --update only skipping when destination is newer. Manual inspection may be needed for conflicting changes.
+- Configuration files (e.g., .env, config files) may need manual merging if they differ between environments.
+
+End of notes.

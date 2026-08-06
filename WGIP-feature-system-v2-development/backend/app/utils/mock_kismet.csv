@@ -1,0 +1,4 @@
+bssid,ssid,rssi,channel,latitude,longitude,encryption
+AA:BB:CC:DD:EE:11,CSV_HomeWiFi,-42,6,14.5995,120.9842,WPA2
+AA:BB:CC:DD:EE:12,CSV_CafeWiFi,-70,11,14.6001,120.9850,Open
+AA:BB:CC:DD:EE:13,CSV_OfficeWiFi,-58,1,14.6010,120.9860,WPA3

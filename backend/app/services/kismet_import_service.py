@@ -1,0 +1,1457 @@
+import hashlib
+import json
+import shutil
+import sqlite3
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.utils.mac_manufacturer import resolve_manufacturer
+
+
+# ------------------------------------------------------------
+# General safe helpers
+# ------------------------------------------------------------
+# These helpers keep the importer stable kahit may missing/empty fields
+# sa actual Kismet SQLite file.
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def clean_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    text_value = str(value).strip()
+
+    if text_value == "":
+        return None
+
+    return text_value
+
+
+def to_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+
+    try:
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def to_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def timestamp_to_datetime(value: Any) -> Optional[datetime]:
+    if value is None or value == "" or value == 0:
+        return None
+
+    try:
+        return datetime.fromtimestamp(int(float(value)), tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def is_valid_coordinate(latitude: Any, longitude: Any) -> bool:
+    lat = to_float(latitude)
+    lon = to_float(longitude)
+
+    if lat is None or lon is None:
+        return False
+
+    # Kismet usually stores 0.0 / 0.0 kapag walang GPS.
+    if lat == 0 and lon == 0:
+        return False
+
+    return True
+
+
+def safe_json_loads(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+
+    if isinstance(value, bytes):
+        text_value = value.decode("utf-8", errors="ignore")
+    else:
+        text_value = str(value)
+
+    try:
+        loaded = json.loads(text_value)
+
+        if isinstance(loaded, dict):
+            return loaded
+
+        return {"value": loaded}
+    except Exception:
+        return None
+
+
+def safe_json_dumps(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    try:
+        return json.dumps(value)
+    except Exception:
+        return None
+
+
+def bytes_or_none(value: Any) -> Optional[bytes]:
+    if value is None:
+        return None
+
+    if isinstance(value, bytes):
+        return value
+
+    try:
+        return str(value).encode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+
+def file_sha256(file_path: Path) -> str:
+    sha256 = hashlib.sha256()
+
+    with file_path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def table_exists(db: Session, table_name: str) -> bool:
+    result = db.execute(
+        text("SELECT to_regclass(:table_name) IS NOT NULL AS exists"),
+        {"table_name": f"public.{table_name}"},
+    ).mappings().first()
+
+    return bool(result and result["exists"])
+
+
+# ------------------------------------------------------------
+# SQLite helpers
+# ------------------------------------------------------------
+# A .kismet file is a SQLite database.
+# These helpers read the tables inside the actual .kismet file.
+
+
+def sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        """,
+        (table_name,),
+    ).fetchone()
+
+    return row is not None
+
+
+def sqlite_count(conn: sqlite3.Connection, table_name: str) -> int:
+    if not sqlite_table_exists(conn, table_name):
+        return 0
+
+    row = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+
+    return int(row[0] or 0)
+
+
+def fetch_sqlite_rows(
+    conn: sqlite3.Connection,
+    table_name: str,
+    limit: Optional[int] = None,
+) -> List[sqlite3.Row]:
+    if not sqlite_table_exists(conn, table_name):
+        return []
+
+    query = f"SELECT * FROM {table_name}"
+
+    if limit:
+        query += f" LIMIT {int(limit)}"
+
+    return conn.execute(query).fetchall()
+
+
+def get_row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
+    try:
+        if key in row.keys():
+            return row[key]
+    except Exception:
+        return default
+
+    return default
+
+
+# ------------------------------------------------------------
+# Kismet metadata extraction
+# ------------------------------------------------------------
+# Kismet stores metadata in the KISMET table.
+# Different Kismet versions may have slightly different columns,
+# kaya flexible yung parser dito.
+
+
+def read_kismet_metadata(conn: sqlite3.Connection) -> Dict[str, Any]:
+    metadata = {
+        "kismet_version": None,
+        "db_version": None,
+        "db_module": None,
+    }
+
+    if not sqlite_table_exists(conn, "KISMET"):
+        return metadata
+
+    try:
+        rows = conn.execute("SELECT * FROM KISMET").fetchall()
+
+        for row in rows:
+            for key in row.keys():
+                lower_key = str(key).lower()
+                value = row[key]
+
+                if lower_key in {"kismet_version", "version"}:
+                    metadata["kismet_version"] = clean_text(value)
+
+                if lower_key in {"db_version", "database_version"}:
+                    metadata["db_version"] = to_int(value)
+
+                if lower_key in {"db_module", "module"}:
+                    metadata["db_module"] = clean_text(value)
+    except Exception:
+        pass
+
+    return metadata
+
+
+# ------------------------------------------------------------
+# Coordinate helper
+# ------------------------------------------------------------
+# If Kismet has valid GPS, use Kismet coordinates.
+# If wala, fallback to manual coordinates from upload form.
+
+
+def pick_coordinates(
+    row: sqlite3.Row,
+    manual_latitude: Optional[float],
+    manual_longitude: Optional[float],
+) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    avg_lat = get_row_value(row, "avg_lat")
+    avg_lon = get_row_value(row, "avg_lon")
+
+    if is_valid_coordinate(avg_lat, avg_lon):
+        return to_float(avg_lat), to_float(avg_lon), "kismet"
+
+    lat = get_row_value(row, "lat")
+    lon = get_row_value(row, "lon")
+
+    if is_valid_coordinate(lat, lon):
+        return to_float(lat), to_float(lon), "kismet"
+
+    if manual_latitude is not None and manual_longitude is not None:
+        return manual_latitude, manual_longitude, "manual"
+
+    return None, None, None
+
+
+# ------------------------------------------------------------
+# Kismet Wi-Fi parsing helpers
+# ------------------------------------------------------------
+# Kismet stores Wi-Fi info inside the devices.device JSON blob.
+
+
+def parse_device_json(row: sqlite3.Row) -> Dict[str, Any]:
+    blob = get_row_value(row, "device")
+    parsed = safe_json_loads(blob)
+
+    return parsed or {}
+
+
+def normalize_device_type(value: Any) -> str:
+    # Kismet may output device types in slightly different formats.
+    # Examples:
+    # "Wi-FiAP", "Wi-Fi AP", "Wi-Fi Client", "Wi-Fi Bridged"
+    return str(value or "").strip().lower().replace(" ", "").replace("-", "")
+
+
+def is_wifi_ap(device_type: Any) -> bool:
+    normalized = normalize_device_type(device_type)
+
+    return normalized in {
+        "wifiap",
+        "dot11ap",
+        "ap",
+    }
+
+
+def is_wifi_client_or_bridged(device_type: Any) -> bool:
+    normalized = normalize_device_type(device_type)
+
+    return normalized in {
+        "wificlient",
+        "wifibridged",
+        "wifidevice",
+        "dot11client",
+        "client",
+        "bridged",
+    }
+
+
+def get_ap_ssid(device_json: Dict[str, Any], fallback: str = "") -> str:
+    dot11 = device_json.get("dot11.device", {})
+
+    last_beacon = dot11.get("dot11.device.last_beaconed_ssid_record", {})
+    ssid = last_beacon.get("dot11.advertisedssid.ssid")
+
+    if ssid:
+        return ssid
+
+    ssid_map = dot11.get("dot11.device.advertised_ssid_map", [])
+
+    if isinstance(ssid_map, list) and ssid_map:
+        ssid = ssid_map[0].get("dot11.advertisedssid.ssid")
+
+        if ssid:
+            return ssid
+
+    return (
+        device_json.get("kismet.device.base.name")
+        or device_json.get("kismet.device.base.commonname")
+        or fallback
+        or "Hidden/Unknown"
+    )
+
+
+def get_ap_encryption(device_json: Dict[str, Any]) -> str:
+    dot11 = device_json.get("dot11.device", {})
+
+    last_beacon = dot11.get("dot11.device.last_beaconed_ssid_record", {})
+    crypt = last_beacon.get("dot11.advertisedssid.crypt_string")
+
+    if crypt:
+        return crypt
+
+    return device_json.get("kismet.device.base.crypt") or ""
+
+
+def get_channel(device_json: Dict[str, Any]) -> Optional[int]:
+    return to_int(device_json.get("kismet.device.base.channel"))
+
+
+def get_vendor(
+    device_json: Dict[str, Any],
+    mac_address: Any = None,
+) -> str:
+    return resolve_manufacturer(
+        mac_address
+        or device_json.get("kismet.device.base.macaddr"),
+        device_json.get("kismet.device.base.manuf"),
+    )
+
+
+def get_last_bssid(device_json: Dict[str, Any]) -> str:
+    dot11 = device_json.get("dot11.device", {})
+
+    return dot11.get("dot11.device.last_bssid") or ""
+
+
+def get_client_map(device_json: Dict[str, Any]) -> Dict[str, Any]:
+    dot11 = device_json.get("dot11.device", {})
+    client_map = dot11.get("dot11.device.client_map", {})
+
+    if isinstance(client_map, dict):
+        return client_map
+
+    return {}
+
+
+def get_associated_client_map(device_json: Dict[str, Any]) -> Dict[str, Any]:
+    dot11 = device_json.get("dot11.device", {})
+    associated_map = dot11.get("dot11.device.associated_client_map", {})
+
+    if isinstance(associated_map, dict):
+        return associated_map
+
+    return {}
+
+
+# ------------------------------------------------------------
+# Import batch helpers
+# ------------------------------------------------------------
+# kismet_import_batches = parent record per imported .kismet file.
+
+
+def create_import_batch(
+    db: Session,
+    *,
+    survey_id: Optional[int],
+    original_filename: str,
+    file_size: int,
+    file_hash: str,
+    metadata: Dict[str, Any],
+    manual_area_label: Optional[str],
+    manual_latitude: Optional[float],
+    manual_longitude: Optional[float],
+    device_count: int,
+    packet_count: int,
+    message_count: int,
+    snapshot_count: int,
+    alert_count: int,
+    data_count: int,
+    datasource_count: int,
+) -> int:
+    result = db.execute(
+        text(
+            """
+            INSERT INTO kismet_import_batches (
+                survey_id,
+                original_filename,
+                file_size,
+                file_hash,
+                kismet_version,
+                db_version,
+                db_module,
+                import_status,
+                manual_area_label,
+                manual_latitude,
+                manual_longitude,
+                coordinate_source,
+                device_count,
+                packet_count,
+                message_count,
+                snapshot_count,
+                alert_count,
+                data_count,
+                datasource_count,
+                created_at
+            )
+            VALUES (
+                :survey_id,
+                :original_filename,
+                :file_size,
+                :file_hash,
+                :kismet_version,
+                :db_version,
+                :db_module,
+                'processing',
+                :manual_area_label,
+                :manual_latitude,
+                :manual_longitude,
+                :coordinate_source,
+                :device_count,
+                :packet_count,
+                :message_count,
+                :snapshot_count,
+                :alert_count,
+                :data_count,
+                :datasource_count,
+                NOW()
+            )
+            RETURNING id
+            """
+        ),
+        {
+            "survey_id": survey_id,
+            "original_filename": original_filename,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "kismet_version": metadata.get("kismet_version"),
+            "db_version": metadata.get("db_version"),
+            "db_module": metadata.get("db_module"),
+            "manual_area_label": manual_area_label,
+            "manual_latitude": manual_latitude,
+            "manual_longitude": manual_longitude,
+            "coordinate_source": (
+                "manual"
+                if manual_latitude is not None and manual_longitude is not None
+                else None
+            ),
+            "device_count": device_count,
+            "packet_count": packet_count,
+            "message_count": message_count,
+            "snapshot_count": snapshot_count,
+            "alert_count": alert_count,
+            "data_count": data_count,
+            "datasource_count": datasource_count,
+        },
+    )
+
+    row = result.mappings().first()
+
+    return int(row["id"])
+
+
+def update_import_batch_status(
+    db: Session,
+    import_batch_id: int,
+    *,
+    import_status: str,
+    wifi_observation_count: int = 0,
+    client_observation_count: int = 0,
+    failed_count: int = 0,
+    error_message: Optional[str] = None,
+) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE kismet_import_batches
+            SET
+                import_status = :import_status,
+                wifi_observation_count = :wifi_observation_count,
+                client_observation_count = :client_observation_count,
+                failed_count = :failed_count,
+                error_message = :error_message,
+                completed_at = NOW()
+            WHERE id = :import_batch_id
+            """
+        ),
+        {
+            "import_batch_id": import_batch_id,
+            "import_status": import_status,
+            "wifi_observation_count": wifi_observation_count,
+            "client_observation_count": client_observation_count,
+            "failed_count": failed_count,
+            "error_message": error_message,
+        },
+    )
+
+
+# ------------------------------------------------------------
+# Raw table insert helpers
+# ------------------------------------------------------------
+# These insert the original Kismet SQLite rows into PostgreSQL raw tables.
+
+
+def insert_raw_devices(
+    db: Session,
+    import_batch_id: int,
+    rows: List[sqlite3.Row],
+) -> int:
+    inserted = 0
+
+    for row in rows:
+        device_blob = get_row_value(row, "device")
+        device_json = safe_json_loads(device_blob)
+
+        db.execute(
+            text(
+                """
+                INSERT INTO kismet_raw_devices (
+                    import_batch_id,
+                    first_time,
+                    last_time,
+                    devkey,
+                    phyname,
+                    devmac,
+                    strongest_signal,
+                    min_lat,
+                    min_lon,
+                    max_lat,
+                    max_lon,
+                    avg_lat,
+                    avg_lon,
+                    bytes_data,
+                    device_type,
+                    device_blob,
+                    device_json
+                )
+                VALUES (
+                    :import_batch_id,
+                    :first_time,
+                    :last_time,
+                    :devkey,
+                    :phyname,
+                    :devmac,
+                    :strongest_signal,
+                    :min_lat,
+                    :min_lon,
+                    :max_lat,
+                    :max_lon,
+                    :avg_lat,
+                    :avg_lon,
+                    :bytes_data,
+                    :device_type,
+                    :device_blob,
+                    CAST(:device_json AS JSONB)
+                )
+                """
+            ),
+            {
+                "import_batch_id": import_batch_id,
+                "first_time": to_int(get_row_value(row, "first_time")),
+                "last_time": to_int(get_row_value(row, "last_time")),
+                "devkey": clean_text(get_row_value(row, "devkey")),
+                "phyname": clean_text(get_row_value(row, "phyname")),
+                "devmac": clean_text(get_row_value(row, "devmac")),
+                "strongest_signal": to_int(get_row_value(row, "strongest_signal")),
+                "min_lat": to_float(get_row_value(row, "min_lat")),
+                "min_lon": to_float(get_row_value(row, "min_lon")),
+                "max_lat": to_float(get_row_value(row, "max_lat")),
+                "max_lon": to_float(get_row_value(row, "max_lon")),
+                "avg_lat": to_float(get_row_value(row, "avg_lat")),
+                "avg_lon": to_float(get_row_value(row, "avg_lon")),
+                "bytes_data": to_int(get_row_value(row, "bytes_data")),
+                "device_type": clean_text(get_row_value(row, "type")),
+                "device_blob": bytes_or_none(device_blob),
+                "device_json": safe_json_dumps(device_json),
+            },
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+def insert_raw_packets(
+    db: Session,
+    import_batch_id: int,
+    rows: List[sqlite3.Row],
+) -> int:
+    inserted = 0
+
+    for row in rows:
+        db.execute(
+            text(
+                """
+                INSERT INTO kismet_raw_packets (
+                    import_batch_id,
+                    ts_sec,
+                    ts_usec,
+                    phyname,
+                    sourcemac,
+                    destmac,
+                    transmac,
+                    frequency,
+                    devkey,
+                    lat,
+                    lon,
+                    alt,
+                    speed,
+                    heading,
+                    packet_len,
+                    signal,
+                    datasource,
+                    dlt,
+                    packet_blob,
+                    error,
+                    tags,
+                    datarate,
+                    packet_hash,
+                    packetid,
+                    packet_full_len
+                )
+                VALUES (
+                    :import_batch_id,
+                    :ts_sec,
+                    :ts_usec,
+                    :phyname,
+                    :sourcemac,
+                    :destmac,
+                    :transmac,
+                    :frequency,
+                    :devkey,
+                    :lat,
+                    :lon,
+                    :alt,
+                    :speed,
+                    :heading,
+                    :packet_len,
+                    :signal,
+                    :datasource,
+                    :dlt,
+                    :packet_blob,
+                    :error,
+                    :tags,
+                    :datarate,
+                    :packet_hash,
+                    :packetid,
+                    :packet_full_len
+                )
+                """
+            ),
+            {
+                "import_batch_id": import_batch_id,
+                "ts_sec": to_int(get_row_value(row, "ts_sec")),
+                "ts_usec": to_int(get_row_value(row, "ts_usec")),
+                "phyname": clean_text(get_row_value(row, "phyname")),
+                "sourcemac": clean_text(get_row_value(row, "sourcemac")),
+                "destmac": clean_text(get_row_value(row, "destmac")),
+                "transmac": clean_text(get_row_value(row, "transmac")),
+                "frequency": to_float(get_row_value(row, "frequency")),
+                "devkey": clean_text(get_row_value(row, "devkey")),
+                "lat": to_float(get_row_value(row, "lat")),
+                "lon": to_float(get_row_value(row, "lon")),
+                "alt": to_float(get_row_value(row, "alt")),
+                "speed": to_float(get_row_value(row, "speed")),
+                "heading": to_float(get_row_value(row, "heading")),
+                "packet_len": to_int(get_row_value(row, "packet_len")),
+                "signal": to_int(get_row_value(row, "signal")),
+                "datasource": clean_text(get_row_value(row, "datasource")),
+                "dlt": to_int(get_row_value(row, "dlt")),
+                "packet_blob": bytes_or_none(get_row_value(row, "packet")),
+                "error": to_int(get_row_value(row, "error")),
+                "tags": clean_text(get_row_value(row, "tags")),
+                "datarate": to_float(get_row_value(row, "datarate")),
+                "packet_hash": to_int(get_row_value(row, "hash")),
+                "packetid": to_int(get_row_value(row, "packetid")),
+                "packet_full_len": to_int(get_row_value(row, "packet_full_len")),
+            },
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+def insert_raw_messages(
+    db: Session,
+    import_batch_id: int,
+    rows: List[sqlite3.Row],
+) -> int:
+    inserted = 0
+
+    for row in rows:
+        db.execute(
+            text(
+                """
+                INSERT INTO kismet_raw_messages (
+                    import_batch_id,
+                    ts_sec,
+                    lat,
+                    lon,
+                    msgtype,
+                    message
+                )
+                VALUES (
+                    :import_batch_id,
+                    :ts_sec,
+                    :lat,
+                    :lon,
+                    :msgtype,
+                    :message
+                )
+                """
+            ),
+            {
+                "import_batch_id": import_batch_id,
+                "ts_sec": to_int(get_row_value(row, "ts_sec")),
+                "lat": to_float(get_row_value(row, "lat")),
+                "lon": to_float(get_row_value(row, "lon")),
+                "msgtype": clean_text(get_row_value(row, "msgtype")),
+                "message": clean_text(get_row_value(row, "message")),
+            },
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+def insert_json_blob_table(
+    db: Session,
+    *,
+    import_batch_id: int,
+    rows: List[sqlite3.Row],
+    table_name: str,
+    json_column: str,
+    json_blob_column: str,
+    type_column: Optional[str] = None,
+    type_source_column: Optional[str] = None,
+) -> int:
+    inserted = 0
+
+    for row in rows:
+        blob = get_row_value(row, "json")
+        parsed_json = safe_json_loads(blob)
+
+        column_names = [
+            "import_batch_id",
+            "ts_sec",
+            "ts_usec",
+            "lat",
+            "lon",
+        ]
+
+        value_names = [
+            ":import_batch_id",
+            ":ts_sec",
+            ":ts_usec",
+            ":lat",
+            ":lon",
+        ]
+
+        params = {
+            "import_batch_id": import_batch_id,
+            "ts_sec": to_int(get_row_value(row, "ts_sec")),
+            "ts_usec": to_int(get_row_value(row, "ts_usec")),
+            "lat": to_float(get_row_value(row, "lat")),
+            "lon": to_float(get_row_value(row, "lon")),
+            "json_blob": bytes_or_none(blob),
+            "json_value": safe_json_dumps(parsed_json),
+        }
+
+        if table_name in {"kismet_raw_alerts", "kismet_raw_data"}:
+            column_names.extend(["phyname", "devmac"])
+            value_names.extend([":phyname", ":devmac"])
+            params["phyname"] = clean_text(get_row_value(row, "phyname"))
+            params["devmac"] = clean_text(get_row_value(row, "devmac"))
+
+        if table_name == "kismet_raw_data":
+            column_names.extend(["alt", "speed", "heading", "datasource"])
+            value_names.extend([":alt", ":speed", ":heading", ":datasource"])
+            params["alt"] = to_float(get_row_value(row, "alt"))
+            params["speed"] = to_float(get_row_value(row, "speed"))
+            params["heading"] = to_float(get_row_value(row, "heading"))
+            params["datasource"] = clean_text(get_row_value(row, "datasource"))
+
+        if type_column and type_source_column:
+            column_names.append(type_column)
+            value_names.append(":record_type")
+            params["record_type"] = clean_text(get_row_value(row, type_source_column))
+
+        column_names.extend([json_blob_column, json_column])
+        value_names.extend([":json_blob", "CAST(:json_value AS JSONB)"])
+
+        db.execute(
+            text(
+                f"""
+                INSERT INTO {table_name} (
+                    {", ".join(column_names)}
+                )
+                VALUES (
+                    {", ".join(value_names)}
+                )
+                """
+            ),
+            params,
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+def insert_raw_datasources(
+    db: Session,
+    import_batch_id: int,
+    rows: List[sqlite3.Row],
+) -> int:
+    inserted = 0
+
+    for row in rows:
+        blob = get_row_value(row, "json")
+        parsed_json = safe_json_loads(blob)
+
+        db.execute(
+            text(
+                """
+                INSERT INTO kismet_raw_datasources (
+                    import_batch_id,
+                    uuid,
+                    typestring,
+                    definition,
+                    name,
+                    interface,
+                    json_blob,
+                    datasource_json
+                )
+                VALUES (
+                    :import_batch_id,
+                    :uuid,
+                    :typestring,
+                    :definition,
+                    :name,
+                    :interface,
+                    :json_blob,
+                    CAST(:datasource_json AS JSONB)
+                )
+                """
+            ),
+            {
+                "import_batch_id": import_batch_id,
+                "uuid": clean_text(get_row_value(row, "uuid")),
+                "typestring": clean_text(get_row_value(row, "typestring")),
+                "definition": clean_text(get_row_value(row, "definition")),
+                "name": clean_text(get_row_value(row, "name")),
+                "interface": clean_text(get_row_value(row, "interface")),
+                "json_blob": bytes_or_none(blob),
+                "datasource_json": safe_json_dumps(parsed_json),
+            },
+        )
+
+        inserted += 1
+
+    return inserted
+
+
+# ------------------------------------------------------------
+# Processed observation inserts
+# ------------------------------------------------------------
+# Raw Kismet data is always saved.
+#
+# Processed tables are optional:
+# - observations
+# - client_observations
+#
+# If a processed table does not exist yet, skipped muna para hindi mag-error.
+
+
+def insert_wifi_observation(
+    db: Session,
+    *,
+    survey_id: Optional[int],
+    import_batch_id: int,
+    row: sqlite3.Row,
+    manual_area_label: Optional[str],
+    manual_latitude: Optional[float],
+    manual_longitude: Optional[float],
+) -> bool:
+
+    if not table_exists(db, "observations"):
+        return False
+
+    device_json = parse_device_json(row)
+    bssid = clean_text(get_row_value(row, "devmac")) or clean_text(
+        device_json.get("kismet.device.base.macaddr")
+    )
+    latitude, longitude, coordinate_source = pick_coordinates(
+        row,
+        manual_latitude,
+        manual_longitude,
+    )
+
+    db.execute(
+        text(
+            """
+            INSERT INTO observations (
+                survey_id,
+                import_batch_id,
+                bssid,
+                ssid,
+                manufacturer,
+                channel,
+                rssi,
+                signal_dbm,
+                encryption,
+                latitude,
+                longitude,
+                timestamp,
+                area_label,
+                country,
+                notes,
+                coordinate_source
+            )
+            VALUES (
+                :survey_id,
+                :import_batch_id,
+                :bssid,
+                :ssid,
+                :manufacturer,
+                :channel,
+                :rssi,
+                :signal_dbm,
+                :encryption,
+                :latitude,
+                :longitude,
+                :timestamp,
+                :area_label,
+                :country,
+                :notes,
+                :coordinate_source
+            )
+            """
+        ),
+        {
+            "survey_id": survey_id,
+            "import_batch_id": import_batch_id,
+            "bssid": bssid,
+            "ssid": get_ap_ssid(
+                device_json,
+                fallback=bssid or "",
+            ),
+            "manufacturer": get_vendor(device_json, bssid),
+            "channel": get_channel(device_json),
+            "rssi": to_int(get_row_value(row, "strongest_signal")),
+            "signal_dbm": to_int(get_row_value(row, "strongest_signal")),
+            "encryption": get_ap_encryption(device_json),
+            "latitude": latitude,
+            "longitude": longitude,
+            "timestamp": timestamp_to_datetime(get_row_value(row, "last_time")),
+            "area_label": manual_area_label,
+            "country": "Philippines",
+            "notes": "Imported from Kismet .kismet file.",
+            "coordinate_source": coordinate_source,
+        },
+    )
+
+    return True
+
+
+def insert_client_observation(
+    db: Session,
+    *,
+    survey_id: Optional[int],
+    import_batch_id: int,
+    client_mac: str,
+    client_vendor: str,
+    bssid: str,
+    ssid: str,
+    channel: Optional[int],
+    signal_dbm: Optional[int],
+    timestamp: Optional[datetime],
+    latitude: Optional[float],
+    longitude: Optional[float],
+    coordinate_source: Optional[str],
+    relationship_type: str,
+) -> bool:
+
+    if not table_exists(db, "client_observations"):
+        return False
+
+    if not client_mac:
+        return False
+
+    db.execute(
+        text(
+            """
+            INSERT INTO client_observations (
+                survey_id,
+                import_batch_id,
+                bssid,
+                ssid,
+                channel,
+                client_mac,
+                client_vendor,
+                timestamp,
+                latitude,
+                longitude,
+                signal_dbm,
+                relationship_type,
+                coordinate_source,
+                source
+            )
+            VALUES (
+                :survey_id,
+                :import_batch_id,
+                :bssid,
+                :ssid,
+                :channel,
+                :client_mac,
+                :client_vendor,
+                :timestamp,
+                :latitude,
+                :longitude,
+                :signal_dbm,
+                :relationship_type,
+                :coordinate_source,
+                :source
+            )
+            """
+        ),
+        {
+            "survey_id": survey_id,
+            "import_batch_id": import_batch_id,
+            "bssid": bssid,
+            "ssid": ssid,
+            "channel": channel,
+            "client_mac": client_mac,
+            "client_vendor": client_vendor,
+            "timestamp": timestamp,
+            "latitude": latitude,
+            "longitude": longitude,
+            "signal_dbm": signal_dbm,
+            "relationship_type": relationship_type,
+            "coordinate_source": coordinate_source,
+            "source": "kismet_file",
+        },
+    )
+
+    return True
+
+
+def build_ap_lookup(device_rows: List[sqlite3.Row]) -> Dict[str, Dict[str, Any]]:
+    lookup = {}
+
+    for row in device_rows:
+        device_type = clean_text(get_row_value(row, "type"))
+
+        if not is_wifi_ap(device_type):
+            continue
+
+        device_json = parse_device_json(row)
+        bssid = clean_text(get_row_value(row, "devmac"))
+
+        if not bssid:
+            continue
+
+        lookup[bssid] = {
+            "bssid": bssid,
+            "ssid": get_ap_ssid(device_json, fallback=bssid),
+            "channel": get_channel(device_json),
+            "encryption": get_ap_encryption(device_json),
+            "vendor": get_vendor(device_json, bssid),
+        }
+
+    return lookup
+
+
+def insert_processed_records(
+    db: Session,
+    *,
+    import_batch_id: int,
+    survey_id: Optional[int],
+    device_rows: List[sqlite3.Row],
+    manual_area_label: Optional[str],
+    manual_latitude: Optional[float],
+    manual_longitude: Optional[float],
+) -> Tuple[int, int, int]:
+    wifi_inserted = 0
+    client_inserted = 0
+    failed = 0
+    seen_clients = set()
+
+    ap_lookup = build_ap_lookup(device_rows)
+
+    for row in device_rows:
+        try:
+            device_type = clean_text(get_row_value(row, "type"))
+            device_json = parse_device_json(row)
+
+            latitude, longitude, coordinate_source = pick_coordinates(
+                row,
+                manual_latitude,
+                manual_longitude,
+            )
+
+            if is_wifi_ap(device_type):
+                if insert_wifi_observation(
+                    db,
+                    survey_id=survey_id,
+                    import_batch_id=import_batch_id,
+                    row=row,
+                    manual_area_label=manual_area_label,
+                    manual_latitude=manual_latitude,
+                    manual_longitude=manual_longitude,
+                ):
+                    wifi_inserted += 1
+
+                associated_clients = get_associated_client_map(device_json)
+                bssid = clean_text(get_row_value(row, "devmac")) or ""
+                ap_info = ap_lookup.get(bssid, {})
+
+                for client_mac in associated_clients.keys():
+                    dedupe_key = (
+                        client_mac,
+                        bssid,
+                        get_row_value(row, "last_time"),
+                        "associated",
+                    )
+
+                    if dedupe_key in seen_clients:
+                        continue
+
+                    seen_clients.add(dedupe_key)
+
+                    if insert_client_observation(
+                        db,
+                        survey_id=survey_id,
+                        import_batch_id=import_batch_id,
+                        client_mac=client_mac,
+                        client_vendor=resolve_manufacturer(client_mac),
+                        bssid=bssid,
+                        ssid=ap_info.get("ssid", ""),
+                        channel=ap_info.get("channel"),
+                        signal_dbm=to_int(get_row_value(row, "strongest_signal")),
+                        timestamp=timestamp_to_datetime(get_row_value(row, "last_time")),
+                        latitude=latitude,
+                        longitude=longitude,
+                        coordinate_source=coordinate_source,
+                        relationship_type="associated",
+                    ):
+                        client_inserted += 1
+
+                continue
+
+            client_mac = clean_text(get_row_value(row, "devmac")) or ""
+            client_vendor = get_vendor(device_json, client_mac)
+            possible_bssids = []
+
+            last_bssid = get_last_bssid(device_json)
+
+            if last_bssid and last_bssid != "00:00:00:00:00:00":
+                possible_bssids.append(last_bssid)
+
+            client_map = get_client_map(device_json)
+
+            for bssid in client_map.keys():
+                if bssid and bssid != "00:00:00:00:00:00":
+                    possible_bssids.append(bssid)
+
+            unique_bssids = []
+
+            for bssid in possible_bssids:
+                if bssid not in unique_bssids:
+                    unique_bssids.append(bssid)
+
+            for bssid in unique_bssids:
+                ap_info = ap_lookup.get(bssid, {})
+
+                dedupe_key = (
+                    client_mac,
+                    bssid,
+                    get_row_value(row, "last_time"),
+                    "client",
+                )
+
+                if dedupe_key in seen_clients:
+                    continue
+
+                seen_clients.add(dedupe_key)
+
+                if insert_client_observation(
+                    db,
+                    survey_id=survey_id,
+                    import_batch_id=import_batch_id,
+                    client_mac=client_mac,
+                    client_vendor=client_vendor,
+                    bssid=bssid,
+                    ssid=ap_info.get("ssid", ""),
+                    channel=ap_info.get("channel") or get_channel(device_json),
+                    signal_dbm=to_int(get_row_value(row, "strongest_signal")),
+                    timestamp=timestamp_to_datetime(get_row_value(row, "last_time")),
+                    latitude=latitude,
+                    longitude=longitude,
+                    coordinate_source=coordinate_source,
+                    relationship_type=device_type or "observed",
+                ):
+                    client_inserted += 1
+
+        except Exception:
+            failed += 1
+
+    return wifi_inserted, client_inserted, failed
+
+
+# ------------------------------------------------------------
+# Public service entry point
+# ------------------------------------------------------------
+# This is called by the API endpoint after uploading a .kismet file.
+
+
+def import_kismet_file(
+    db: Session,
+    *,
+    uploaded_file_path: Path,
+    original_filename: str,
+    survey_id: Optional[int] = None,
+    manual_area_label: Optional[str] = None,
+    manual_latitude: Optional[float] = None,
+    manual_longitude: Optional[float] = None,
+    import_packets: bool = True,
+) -> Dict[str, Any]:
+    file_size = uploaded_file_path.stat().st_size
+    file_hash = file_sha256(uploaded_file_path)
+
+    conn = sqlite3.connect(uploaded_file_path)
+    conn.row_factory = sqlite3.Row
+
+    import_batch_id: Optional[int] = None
+
+    try:
+        metadata = read_kismet_metadata(conn)
+
+        device_count = sqlite_count(conn, "devices")
+        packet_count = sqlite_count(conn, "packets")
+        message_count = sqlite_count(conn, "messages")
+        snapshot_count = sqlite_count(conn, "snapshots")
+        alert_count = sqlite_count(conn, "alerts")
+        data_count = sqlite_count(conn, "data")
+        datasource_count = sqlite_count(conn, "datasources")
+
+        import_batch_id = create_import_batch(
+            db,
+            survey_id=survey_id,
+            original_filename=original_filename,
+            file_size=file_size,
+            file_hash=file_hash,
+            metadata=metadata,
+            manual_area_label=manual_area_label,
+            manual_latitude=manual_latitude,
+            manual_longitude=manual_longitude,
+            device_count=device_count,
+            packet_count=packet_count,
+            message_count=message_count,
+            snapshot_count=snapshot_count,
+            alert_count=alert_count,
+            data_count=data_count,
+            datasource_count=datasource_count,
+        )
+
+        device_rows = fetch_sqlite_rows(conn, "devices")
+        packet_rows = fetch_sqlite_rows(conn, "packets") if import_packets else []
+        message_rows = fetch_sqlite_rows(conn, "messages")
+        snapshot_rows = fetch_sqlite_rows(conn, "snapshots")
+        alert_rows = fetch_sqlite_rows(conn, "alerts")
+        data_rows = fetch_sqlite_rows(conn, "data")
+        datasource_rows = fetch_sqlite_rows(conn, "datasources")
+
+        raw_devices_inserted = insert_raw_devices(db, import_batch_id, device_rows)
+
+        raw_packets_inserted = 0
+
+        if import_packets:
+            raw_packets_inserted = insert_raw_packets(
+                db,
+                import_batch_id,
+                packet_rows,
+            )
+
+        raw_messages_inserted = insert_raw_messages(
+            db,
+            import_batch_id,
+            message_rows,
+        )
+
+        raw_snapshots_inserted = insert_json_blob_table(
+            db,
+            import_batch_id=import_batch_id,
+            rows=snapshot_rows,
+            table_name="kismet_raw_snapshots",
+            json_column="snapshot_json",
+            json_blob_column="json_blob",
+            type_column="snaptype",
+            type_source_column="snaptype",
+        )
+
+        raw_alerts_inserted = insert_json_blob_table(
+            db,
+            import_batch_id=import_batch_id,
+            rows=alert_rows,
+            table_name="kismet_raw_alerts",
+            json_column="alert_json",
+            json_blob_column="json_blob",
+            type_column="header",
+            type_source_column="header",
+        )
+
+        raw_data_inserted = insert_json_blob_table(
+            db,
+            import_batch_id=import_batch_id,
+            rows=data_rows,
+            table_name="kismet_raw_data",
+            json_column="data_json",
+            json_blob_column="json_blob",
+            type_column="data_type",
+            type_source_column="type",
+        )
+
+        raw_datasources_inserted = insert_raw_datasources(
+            db,
+            import_batch_id,
+            datasource_rows,
+        )
+
+        wifi_inserted, client_inserted, failed = insert_processed_records(
+            db,
+            import_batch_id=import_batch_id,
+            survey_id=survey_id,
+            device_rows=device_rows,
+            manual_area_label=manual_area_label,
+            manual_latitude=manual_latitude,
+            manual_longitude=manual_longitude,
+        )
+
+        update_import_batch_status(
+            db,
+            import_batch_id,
+            import_status="completed",
+            wifi_observation_count=wifi_inserted,
+            client_observation_count=client_inserted,
+            failed_count=failed,
+            error_message=None,
+        )
+
+        db.commit()
+
+        return {
+            "status": "completed",
+            "import_batch_id": import_batch_id,
+            "survey_id": survey_id,
+            "original_filename": original_filename,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "kismet_version": metadata.get("kismet_version"),
+            "counts": {
+                "devices": device_count,
+                "packets": packet_count,
+                "messages": message_count,
+                "snapshots": snapshot_count,
+                "alerts": alert_count,
+                "data": data_count,
+                "datasources": datasource_count,
+            },
+            "raw_inserted": {
+                "devices": raw_devices_inserted,
+                "packets": raw_packets_inserted,
+                "messages": raw_messages_inserted,
+                "snapshots": raw_snapshots_inserted,
+                "alerts": raw_alerts_inserted,
+                "data": raw_data_inserted,
+                "datasources": raw_datasources_inserted,
+            },
+            "processed_inserted": {
+                "wifi_observations": wifi_inserted,
+                "client_observations": client_inserted,
+                "failed": failed,
+            },
+            "notes": (
+                "Raw Kismet tables imported. Processed records are inserted only "
+                "when the target processed tables exist and survey_id is provided."
+            ),
+        }
+
+    except Exception as exc:
+        db.rollback()
+
+        if import_batch_id:
+            try:
+                update_import_batch_status(
+                    db,
+                    import_batch_id,
+                    import_status="failed",
+                    failed_count=1,
+                    error_message=str(exc),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        raise
+
+    finally:
+        conn.close()
+
+
+def save_upload_to_temp(upload_file: Any) -> Path:
+    suffix = Path(upload_file.filename or "").suffix or ".kismet"
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="wgip_kismet_"))
+    temp_path = temp_dir / f"upload{suffix}"
+
+    with temp_path.open("wb") as buffer:
+        shutil.copyfileobj(upload_file.file, buffer)
+
+    return temp_path

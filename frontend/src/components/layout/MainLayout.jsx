@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import {
   Avatar,
@@ -14,6 +14,7 @@ import {
   Stack,
   Tooltip,
   Typography,
+  Collapse,
 } from "@mui/material";
 
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -26,7 +27,12 @@ import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import NotificationsIcon from "@mui/icons-material/Notifications";
 import StorageIcon from "@mui/icons-material/Storage";
 import SettingsIcon from "@mui/icons-material/Settings";
-import SecurityIcon from "@mui/icons-material/Security"; // <-- ADD THIS
+import SecurityIcon from "@mui/icons-material/Security";
+import ExpandLess from "@mui/icons-material/ExpandLess";
+import ExpandMore from "@mui/icons-material/ExpandMore";
+import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
+import GpsFixedIcon from "@mui/icons-material/GpsFixed";
+import WifiOffIcon from "@mui/icons-material/WifiOff";
 
 import api from "../../services/api";
 import { currentUser } from "../../config/currentUser";
@@ -42,7 +48,20 @@ const menuItems = [
   { label: "Map", path: "/map", icon: <MapIcon /> },
   { label: "Review Items", path: "/signals", icon: <ManageSearchIcon /> },
   { label: "Observations", path: "/observations", icon: <StorageIcon /> },
-  { label: "DeAuth", path: "/deauth", icon: <SecurityIcon /> }, // <-- ADD THIS
+  {
+    label: "Live Operation",
+    icon: <WifiIcon />,
+    children: [
+      { label: "Live Scan", path: "/live-operation/scan", icon: <SignalCellularAltIcon /> },
+      { label: "DeAuth Monitor", path: "/live-operation/deauth", icon: <WifiOffIcon /> },
+      { label: "Signal Map", path: "/live-operation/map", icon: <GpsFixedIcon /> },
+    ],
+  },
+  { label: "Monitoring", icon: <SecurityIcon />, children: [
+      { label: "Live Scanning", path: "/live-scanning", icon: <SignalCellularAltIcon /> },
+      { label: "DeAuth", path: "/deauth", icon: <WifiOffIcon /> },
+      { label: "Signal Map", path: "/signal-map", icon: <GpsFixedIcon /> },
+    ]},
   { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
 ];
 
@@ -67,29 +86,46 @@ function WgipLogo() {
 }
 
 export default function MainLayout({ children }) {
+  const location = useLocation();
   const [unreadAlerts, setUnreadAlerts] = useState(0);
+  
+  // State for expanded/collapsed menu items
+  const [expandedMenus, setExpandedMenus] = useState({
+    "Live Operation": true, // Live Operation is expanded by default
+    Monitoring: true, // Monitoring is expanded by default
+  });
 
   useEffect(() => {
     async function loadUnreadAlerts() {
       try {
         const response = await api.get("/alerts/unread-count");
-
         const count =
           response.data?.count ??
           response.data?.unread_count ??
           response.data?.total ??
           0;
-
         setUnreadAlerts(count);
       } catch {
         setUnreadAlerts(0);
       }
     }
-
     loadUnreadAlerts();
   }, []);
 
   const userName = currentUser?.name || "Admin";
+
+  // Check if any child path is active
+  const isChildActive = (children) => {
+    return children.some((child) => location.pathname === child.path);
+  };
+
+  // Toggle expand/collapse
+  const handleToggle = (label) => {
+    setExpandedMenus((prev) => ({
+      ...prev,
+      [label]: !prev[label],
+    }));
+  };
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#f7f8fa" }}>
@@ -117,7 +153,6 @@ export default function MainLayout({ children }) {
         >
           <Stack direction="row" spacing={1.25} alignItems="center">
             <WgipLogo />
-
             <Box sx={{ minWidth: 0 }}>
               <Typography
                 sx={{
@@ -130,7 +165,6 @@ export default function MainLayout({ children }) {
               >
                 WGIP
               </Typography>
-
               <Typography
                 sx={{
                   mt: 0.25,
@@ -148,46 +182,142 @@ export default function MainLayout({ children }) {
         </Box>
 
         <List sx={{ px: 1.5, py: 1.5 }}>
-          {menuItems.map((item) => (
-            <ListItemButton
-              key={item.path}
-              component={NavLink}
-              to={item.path}
-              end={item.path === "/"}
-              sx={{
-                mb: 0.35,
-                minHeight: 42,
-                px: 1.4,
-                borderRadius: 2,
-                color: "#4b5563",
-                "& .MuiListItemIcon-root": {
-                  minWidth: 36,
-                  color: "inherit",
-                },
-                "& .MuiSvgIcon-root": {
-                  fontSize: 20,
-                },
-                "& .MuiListItemText-primary": {
-                  fontSize: 14,
-                  fontWeight: 500,
-                },
-                "&:hover": {
-                  bgcolor: "#f3f4f6",
-                  color: "#111827",
-                },
-                "&.active": {
-                  bgcolor: "#e8f5ee",
-                  color: "#087443",
-                },
-                "&.active .MuiListItemText-primary": {
-                  fontWeight: 700,
-                },
-              }}
-            >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
-            </ListItemButton>
-          ))}
+          {menuItems.map((item) => {
+            // Check if item has children (nested menu)
+            if (item.children) {
+              const isExpanded = expandedMenus[item.label] || false;
+              const hasActiveChild = isChildActive(item.children);
+
+              return (
+                <Box key={item.label}>
+                  <ListItemButton
+                    onClick={() => handleToggle(item.label)}
+                    sx={{
+                      mb: 0.35,
+                      minHeight: 42,
+                      px: 1.4,
+                      borderRadius: 2,
+                      color: hasActiveChild ? "#087443" : "#4b5563",
+                      bgcolor: hasActiveChild ? "#e8f5ee" : "transparent",
+                      "& .MuiListItemIcon-root": {
+                        minWidth: 36,
+                        color: "inherit",
+                      },
+                      "& .MuiSvgIcon-root": {
+                        fontSize: 20,
+                      },
+                      "& .MuiListItemText-primary": {
+                        fontSize: 14,
+                        fontWeight: hasActiveChild ? 700 : 500,
+                      },
+                      "&:hover": {
+                        bgcolor: "#f3f4f6",
+                        color: "#111827",
+                      },
+                    }}
+                  >
+                    <ListItemIcon>{item.icon}</ListItemIcon>
+                    <ListItemText primary={item.label} />
+                    {isExpanded ? <ExpandLess /> : <ExpandMore />}
+                  </ListItemButton>
+
+                  <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                    <List component="div" disablePadding>
+                      {item.children.map((child) => {
+                        const isActive = location.pathname === child.path;
+                        return (
+                          <ListItemButton
+                            key={child.path}
+                            component={NavLink}
+                            to={child.path}
+                            sx={{
+                              mb: 0.25,
+                              minHeight: 38,
+                              pl: 4.8,
+                              pr: 1.4,
+                              py: 0.6,
+                              borderRadius: 2,
+                              color: isActive ? "#087443" : "#4b5563",
+                              bgcolor: isActive ? "#e8f5ee" : "transparent",
+                              "& .MuiListItemIcon-root": {
+                                minWidth: 32,
+                                color: "inherit",
+                              },
+                              "& .MuiSvgIcon-root": {
+                                fontSize: 18,
+                              },
+                              "& .MuiListItemText-primary": {
+                                fontSize: 13.5,
+                                fontWeight: isActive ? 700 : 400,
+                              },
+                              "&:hover": {
+                                bgcolor: "#f3f4f6",
+                                color: "#111827",
+                              },
+                              "&.active": {
+                                bgcolor: "#e8f5ee",
+                                color: "#087443",
+                              },
+                              "&.active .MuiListItemText-primary": {
+                                fontWeight: 700,
+                              },
+                            }}
+                          >
+                            {child.icon && <ListItemIcon>{child.icon}</ListItemIcon>}
+                            <ListItemText primary={child.label} />
+                          </ListItemButton>
+                        );
+                      })}
+                    </List>
+                  </Collapse>
+                </Box>
+              );
+            }
+
+            // Regular menu item (no children)
+            const isActive = location.pathname === item.path;
+            return (
+              <ListItemButton
+                key={item.path}
+                component={NavLink}
+                to={item.path}
+                end={item.path === "/"}
+                sx={{
+                  mb: 0.35,
+                  minHeight: 42,
+                  px: 1.4,
+                  borderRadius: 2,
+                  color: isActive ? "#087443" : "#4b5563",
+                  bgcolor: isActive ? "#e8f5ee" : "transparent",
+                  "& .MuiListItemIcon-root": {
+                    minWidth: 36,
+                    color: "inherit",
+                  },
+                  "& .MuiSvgIcon-root": {
+                    fontSize: 20,
+                  },
+                  "& .MuiListItemText-primary": {
+                    fontSize: 14,
+                    fontWeight: isActive ? 700 : 500,
+                  },
+                  "&:hover": {
+                    bgcolor: "#f3f4f6",
+                    color: "#111827",
+                  },
+                  "&.active": {
+                    bgcolor: "#e8f5ee",
+                    color: "#087443",
+                  },
+                  "&.active .MuiListItemText-primary": {
+                    fontWeight: 700,
+                  },
+                }}
+              >
+                <ListItemIcon>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.label} />
+              </ListItemButton>
+            );
+          })}
         </List>
 
         <Box sx={{ flexGrow: 1 }} />
@@ -212,7 +342,6 @@ export default function MainLayout({ children }) {
                   boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.12)",
                 }}
               />
-
               <Box>
                 <Typography
                   variant="body2"
@@ -220,7 +349,6 @@ export default function MainLayout({ children }) {
                 >
                   Operational
                 </Typography>
-
                 <Typography
                   variant="caption"
                   color="text.secondary"
@@ -315,7 +443,6 @@ export default function MainLayout({ children }) {
               >
                 {userName.charAt(0).toUpperCase()}
               </Avatar>
-
               <Box
                 sx={{
                   height: "100%",

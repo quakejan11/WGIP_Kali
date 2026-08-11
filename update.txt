@@ -1,0 +1,445 @@
+================================================================================
+                    LIVE OPERATION FEATURE
+                    COMPLETE SPECIFICATION
+================================================================================
+
+DATE: 2026-08-07
+PROJECT: WiFi Analysis Platform
+
+================================================================================
+                         TABLE OF CONTENTS
+================================================================================
+
+1. OVERVIEW
+2. MAIN STRUCTURE
+3. CORE FEATURES
+4. BACKEND REQUIREMENTS
+5. FRONTEND COMPONENTS
+6. DATA FLOW LOGIC
+7. UI LAYOUT
+8. IMPLEMENTATION PRIORITY
+9. FILE CHANGES SUMMARY
+10. KEY DECISIONS MADE
+11. PRE-IMPLEMENTATION QUESTIONS
+
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Transform the existing "DeAuth" page into a comprehensive "Live Operation" 
+center with:
+
+- Live WiFi scanning via Kismet
+- Adapter selection and control
+- Real-time data with Temp DB fallback
+- DeAuth monitoring (existing feature moved to sub-page)
+- Signal mapping
+
+================================================================================
+2. MAIN STRUCTURE
+================================================================================
+
+2.1 Navigation (Sidebar)
+-------------------------------------------------------------------------------
+📡 Live Operation (Main)
+   ├── 📡 Live Scan (MAIN PAGE - Real-time scanning)
+   ├── 🔒 DeAuth Monitor (SUB PAGE - Original DeAuth feature)
+   └── 🗺️ Signal Map (SUB PAGE - Visual signal map)
+
+2.2 Routes
+-------------------------------------------------------------------------------
+/live-operation          → Redirects to /live-operation/scan
+/live-operation/scan     → MAIN: Live Scan page
+/live-operation/deauth   → SUB: DeAuth Monitor page
+/live-operation/map      → SUB: Signal Map page
+
+
+================================================================================
+3. CORE FEATURES
+================================================================================
+
+3.1 Adapter Selection & Kismet Control
+-------------------------------------------------------------------------------
+- Dropdown list of available WiFi interfaces (wlan0, wlan1, etc.)
+- Display adapter details: name, MAC address, mode, channel, status
+- Start Kismet on selected adapter
+- Stop Kismet
+- Refresh status
+- Remember last used adapter
+
+3.2 Live Data Feed (PCAP Stream)
+-------------------------------------------------------------------------------
+- WebSocket connection to Kismet PCAP stream
+- Real-time display of WiFi networks
+- Columns: BSSID, ESSID, Channel, Signal, Security, Clients
+- Signal strength color coding (Green/Yellow/Red)
+- Auto-refresh every 2-3 seconds
+
+3.3 Temp DB Fallback System
+-------------------------------------------------------------------------------
+- All PCAP data automatically saved to Temp DB
+- 24-hour Time-To-Live (auto-cleanup)
+- If PCAP stops for 30+ seconds → Auto-switch to Temp DB
+- If PCAP resumes → Auto-switch back to Live
+- Manual controls: Clear All, Clear Old (>24h), Export to .kismet
+- Status indicator showing Live/Fallback mode
+
+3.4 DeAuth Monitor (Sub Page)
+-------------------------------------------------------------------------------
+- Move existing DeAuthPage.tsx content here
+- List active/stopped DeAuth attacks
+- Start new attack with dialog (BSSID, Client, Channel)
+- Stop running attacks
+- Real-time updates
+
+3.5 Signal Map (Sub Page)
+-------------------------------------------------------------------------------
+- Leaflet map integration
+- Show detected BSSIDs as markers
+- Signal strength circles
+- Click marker → show device details
+- Auto-update with new detections
+
+
+================================================================================
+4. BACKEND REQUIREMENTS
+================================================================================
+
+4.1 API Endpoints
+-------------------------------------------------------------------------------
+GET  /api/interfaces              → List available WiFi interfaces
+POST /api/interfaces/select       → Select active interface
+POST /api/kismet/start            → Start Kismet on selected interface
+POST /api/kismet/stop             → Stop Kismet
+GET  /api/kismet/status           → Check Kismet status
+GET  /api/pcap/status             → PCAP health check (last packet, connected)
+GET  /api/live/events             → Get events from Temp DB (fallback)
+GET  /api/live/events/recent      → Get last N events
+POST /api/live/clear              → Clear all Temp DB data
+POST /api/live/clear-old          → Delete data older than X hours
+GET  /api/live/export             → Export Temp DB data to .kismet
+GET  /api/live/status             → Get Temp DB stats (count, oldest, newest)
+WebSocket /ws/pcap-live           → PCAP live stream
+WebSocket /ws/live-data           → Live data WebSocket
+
+4.2 Database Schema (Temp DB - SQLite)
+-------------------------------------------------------------------------------
+Table: live_events
+
+Column          Type           Description
+-------------------------------------------------------------------------------
+id              Integer        Primary Key
+event_type      String(50)     bssid, client, packet, alert, etc.
+timestamp       DateTime       When event occurred
+data            JSON           Full event details
+bssid           String(17)     Indexed
+channel         Integer        WiFi channel
+signal          Integer        Signal strength
+essid           String         Network name
+created_at      DateTime       When inserted to Temp DB
+expires_at      DateTime       created_at + 24 hours
+
+Indexes:
+- bssid_idx (bssid)
+- created_at_idx (created_at)
+
+4.3 Background Jobs
+-------------------------------------------------------------------------------
+- Auto-cleanup every hour (delete records older than 24h)
+- PCAP health check (monitor last packet timestamp)
+
+
+================================================================================
+5. FRONTEND COMPONENTS
+================================================================================
+
+5.1 New Files to Create
+-------------------------------------------------------------------------------
+src/pages/LiveOperation.jsx              - Main container with sidebar
+src/pages/LiveScan.jsx                   - Main scanning page
+src/pages/SignalMap.jsx                  - Map sub-page
+src/pages/DeAuthMonitor.jsx              - DeAuth sub-page (move existing)
+src/components/layout/LiveOperationSidebar.jsx - Sidebar with adapter control
+src/hooks/useLiveData.js                 - Dual-source data hook
+src/components/live/ConnectionStatus.jsx - Status indicator
+src/components/live/TempDBControls.jsx   - Temp DB controls
+
+5.2 Modified Files
+-------------------------------------------------------------------------------
+src/router/AppRouter.jsx                 - Update routes
+src/components/layout/MainLayout.jsx     - Update sidebar menu
+
+5.3 Deleted Files
+-------------------------------------------------------------------------------
+src/pages/DeAuthPage.tsx                 - Move content to DeAuthMonitor.jsx
+src/pages/DeAuthPage.jsx.bak             - Remove backup
+
+
+================================================================================
+6. DATA FLOW LOGIC
+================================================================================
+
+6.1 Normal Operation (PCAP Active)
+-------------------------------------------------------------------------------
+PCAP Stream → Display Live → Also Save to Temp DB (background)
+
+Status: "🟢 Live PCAP - Connected"
+
+6.2 PCAP Stops for 30s
+-------------------------------------------------------------------------------
+PCAP Stream → ❌ No data for 30s
+→ Auto-detect timeout
+→ Switch to Temp DB
+→ Display from Temp DB
+
+Status: "🟡 Fallback Mode - Using Temp DB (1,234 records)"
+
+6.3 PCAP Resumes
+-------------------------------------------------------------------------------
+PCAP Stream → ✅ Data resumes
+→ Auto-detect reconnection
+→ Switch back to PCAP Live
+
+Status: "🟢 Live PCAP - Connected"
+
+6.4 Complete Flow Diagram
+-------------------------------------------------------------------------------
+┌─────────────────────────────────────────────────────────────┐
+│                    DATA FLOW                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  PCAP Stream (Primary)                             │  │
+│  │  ┌────────────────────┐                            │  │
+│  │  │  Receiving packets │ ───▶ Display Live         │  │
+│  │  └────────────────────┘                            │  │
+│  │         │                                          │  │
+│  │         ▼                                          │  │
+│  │  ┌────────────────────────────────────────────┐    │  │
+│  │  │  Auto-save to Temp DB (always)             │    │  │
+│  │  └────────────────────────────────────────────┘    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                          │                                  │
+│                          ▼                                  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  PCAP Monitor (Health Check)                       │  │
+│  │  ┌──────────────────────────────────────────────┐  │  │
+│  │  │  No packet for 30 seconds → Auto-switch     │  │  │
+│  │  └──────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                          │                                  │
+│                          ▼                                  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Fallback Mode (Temp DB)                          │  │
+│  │  ┌──────────────────────────────────────────────┐  │  │
+│  │  │  Poll Temp DB every 2 seconds                │  │  │
+│  │  │  Display cached data                         │  │  │
+│  │  │  Show "FALLBACK" indicator                   │  │  │
+│  │  └──────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                          │                                  │
+│                          ▼                                  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  PCAP Resumes → Auto-switch back to Live          │  │
+│  │  ┌──────────────────────────────────────────────┐  │  │
+│  │  │  Detect new packet                           │  │  │
+│  │  │  Switch to PCAP mode                        │  │  │
+│  │  │  Resume live display                        │  │  │
+│  │  └──────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+7. UI LAYOUT
+================================================================================
+
+7.1 Sidebar Layout
+-------------------------------------------------------------------------------
+┌──────────────────────────────┐
+│ 📡 Live Operation            │
+│                              │
+│ ┌──────────────────────────┐ │
+│ │ WiFi Adapter: [wlan0 ▼]  │ │
+│ │ Status: ● Running        │ │
+│ │ MAC: AA:BB:CC:DD:EE:FF  │ │
+│ │ Packets: 1,234           │ │
+│ └──────────────────────────┘ │
+│                              │
+│ [▶ Start] [⏹ Stop] [🔄 Refresh] │
+│                              │
+│ Temp DB: ● Active           │
+│ Records: 1,234              │
+│ Oldest: 23h ago             │
+│ Newest: 2s ago              │
+│                              │
+│ [🗑️ Clear All] [🧹 Clear Old] │
+│ [💾 Export to .kismet]      │
+│                              │
+├──────────────────────────────┤
+│ 📡 Live Scan      ← MAIN    │
+│ 🔒 DeAuth Monitor ← SUB     │
+│ 🗺️ Signal Map     ← SUB     │
+└──────────────────────────────┘
+
+7.2 Live Scan Page Layout
+-------------------------------------------------------------------------------
+┌──────────────────────────────────────────────┐
+│ 🟢 Live PCAP - Connected                     │
+│ ┌──────────────────────────────────────────┐ │
+│ │ BSSID      │ ESSID    │ CH │ Signal │ Sec │ │
+│ │ AA:BB:... │ Network1 │ 6  │ -45dBm │ WPA2│ │
+│ │ CC:DD:... │ Network2 │ 1  │ -67dBm │ Open│ │
+│ └──────────────────────────────────────────┘ │
+└──────────────────────────────────────────────┘
+
+7.3 Connection Status Component
+-------------------------------------------------------------------------------
+┌─────────────────────────────────────────────────────────────┐
+│ 🟢 Live PCAP - Connected    │ 1,234 packets   │ 12:34:56 │
+│ 🟡 Fallback Mode (Temp DB)  │ 1,234 records   │ 12:34:56 │
+│ 🔴 Disconnected             │ 0 records       │ --:--:-- │
+└─────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+8. IMPLEMENTATION PRIORITY
+================================================================================
+
+8.1 Phase 1: Backend & Adapter (HIGH PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Create interface listing API
+[ ] Create Kismet control API (start/stop with adapter)
+[ ] Test manually via curl/Postman
+[ ] Create Temp DB schema and models
+[ ] Implement PCAP health check
+[ ] Create WebSocket endpoints
+
+8.2 Phase 2: Sidebar with Controls (HIGH PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Build LiveOperationSidebar.jsx
+[ ] Add adapter dropdown
+[ ] Add Start/Stop buttons
+[ ] Show status indicators
+[ ] Add Temp DB controls
+[ ] Add connection status
+
+8.3 Phase 3: Live Scan (Main Page) (HIGH PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Build LiveScan.jsx
+[ ] Connect to WebSocket/API
+[ ] Display real-time networks
+[ ] Signal color coding
+[ ] Dual-source logic (PCAP + Temp DB fallback)
+[ ] Auto-refresh mechanism
+
+8.4 Phase 4: Move DeAuth (MEDIUM PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Copy existing DeAuth code to DeAuthMonitor.jsx
+[ ] Remove old DeAuthPage.tsx
+[ ] Update imports and routing
+[ ] Verify all functionality works
+
+8.5 Phase 5: Signal Map (MEDIUM PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Build SignalMap.jsx
+[ ] Integrate Leaflet
+[ ] Plot detected networks
+[ ] Show signal strength circles
+[ ] Click for details
+
+8.6 Phase 6: Polish (LOW PRIORITY)
+-------------------------------------------------------------------------------
+[ ] Responsive design
+[ ] Loading states
+[ ] Error handling
+[ ] Auto-refresh toggles
+[ ] Export functionality
+[ ] Keyboard shortcuts
+[ ] Dark mode support
+
+
+================================================================================
+9. FILE CHANGES SUMMARY
+================================================================================
+
+9.1 NEW FILES (8 files)
+-------------------------------------------------------------------------------
+src/pages/LiveOperation.jsx
+src/pages/LiveScan.jsx
+src/pages/SignalMap.jsx
+src/pages/DeAuthMonitor.jsx (copy from DeAuthPage.tsx)
+src/components/layout/LiveOperationSidebar.jsx
+src/hooks/useLiveData.js
+src/components/live/ConnectionStatus.jsx
+src/components/live/TempDBControls.jsx
+
+9.2 MODIFY FILES (3 files)
+-------------------------------------------------------------------------------
+src/router/AppRouter.jsx
+src/components/layout/MainLayout.jsx
+src/services/api.js (add Kismet endpoints)
+
+9.3 DELETE FILES (2 files)
+-------------------------------------------------------------------------------
+src/pages/DeAuthPage.tsx
+src/pages/DeAuthPage.jsx.bak
+
+9.4 BACKEND FILES (3 files)
+-------------------------------------------------------------------------------
+app/models/live_event.py (new)
+app/api/live.py (new)
+app/services/pcap_monitor.py (new)
+
+
+================================================================================
+10. KEY DECISIONS MADE
+================================================================================
+
+[✓] Temp DB Storage: 24-hour TTL with auto-cleanup
+[✓] Fallback: Auto-switch to Temp DB when PCAP stops for 30s
+[✓] No Packet Capture: Removed from scope (not needed)
+[✓] Data Source: PCAP + Temp DB hybrid approach
+[✓] Persistence: .kismet file remains primary historical storage
+[✓] Adapter Selection: User chooses which interface to use
+[✓] Temp DB Type: SQLite (recommended for simplicity)
+[✓] Dual-Source: Seamless transition between PCAP and Temp DB
+[✓] Manual Controls: Clear All, Clear Old, Export to .kismet
+
+
+================================================================================
+11. PRE-IMPLEMENTATION QUESTIONS
+================================================================================
+
+Before starting, confirm the following:
+
+1. [ ] Which database for Temp DB? (SQLite recommended)
+2. [ ] What's your Kismet config file path?
+3. [ ] What's your current DeAuth implementation (API endpoints)?
+4. [ ] Do you have existing WebSocket setup?
+5. [ ] What's your Python/FastAPI version?
+6. [ ] Do you have Leaflet installed for the map?
+7. [ ] What's the path to your .kismet file storage?
+8. [ ] Do you have Redis available (optional for better performance)?
+9. [ ] Is Kismet already running with --rest-api or similar?
+10. [ ] Do you have monitor mode capable adapters?
+
+
+================================================================================
+12. TIMELINE ESTIMATE
+================================================================================
+
+Phase 1: Backend Setup                ~4-6 hours
+Phase 2: Sidebar & Controls           ~3-4 hours
+Phase 3: Live Scan Page               ~4-5 hours
+Phase 4: DeAuth Migration             ~1-2 hours
+Phase 5: Signal Map                   ~3-4 hours
+Phase 6: Polish & Testing             ~2-3 hours
+
+Total Estimated Time: ~17-24 hours
+
+
+================================================================================
+                        END OF SPECIFICATION
+================================================================================

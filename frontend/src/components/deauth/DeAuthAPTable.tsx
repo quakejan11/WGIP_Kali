@@ -49,7 +49,7 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({
   if (aps.length === 0) {
     return (
       <Paper sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="textSecondary">No APs found</Typography>
+        <Typography color="text.secondary">No APs found</Typography>
       </Paper>
     );
   }
@@ -75,12 +75,12 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({
             {aps.map((ap) => (
               <TableRow key={ap.bssid} hover>
                 <TableCell>
-                  <Typography variant="body2" fontWeight="medium">
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
                     {ap.ssid || 'Unknown'}
                   </Typography>
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" fontFamily="monospace" fontSize="13px">
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '13px' }}>
                     {ap.bssid}
                   </Typography>
                 </TableCell>
@@ -88,7 +88,7 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({
                   <Chip label={`CH ${ap.channel || '?'}`} size="small" variant="outlined" />
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" color="textSecondary" fontSize="12px">
+                  <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '12px' }}>
                     {ap.manufacturer || 'Unknown'}
                   </Typography>
                 </TableCell>

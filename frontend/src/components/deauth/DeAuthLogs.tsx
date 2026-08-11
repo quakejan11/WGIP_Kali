@@ -56,7 +56,7 @@ const DeAuthLogs: React.FC<DeAuthLogsProps> = ({ logs, loading }) => {
           <TableBody>
             {logs.map((log) => (
               <TableRow key={log.id} hover>
-                <TableCell fontFamily="monospace" fontSize="12px">
+                <TableCell sx={{ fontFamily: 'monospace', fontSize: '12px' }}>
                   {log.client_mac}
                 </TableCell>
                 <TableCell>{log.reason}</TableCell>

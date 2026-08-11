@@ -13,7 +13,7 @@ const DeAuthStats: React.FC<DeAuthStatsProps> = ({ stats, loading }) => {
     return (
       <Grid container spacing={3} sx={{ mb: 3 }}>
         {[1, 2, 3, 4].map((i) => (
-          <Grid item xs={12} sm={6} md={3} key={i}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }} key={i}>
             <Card>
               <CardContent>
                 <Typography color="textSecondary" gutterBottom>Loading...</Typography>
@@ -28,7 +28,7 @@ const DeAuthStats: React.FC<DeAuthStatsProps> = ({ stats, loading }) => {
 
   return (
     <Grid container spacing={3} sx={{ mb: 3 }}>
-      <Grid item xs={12} sm={6} md={3}>
+      <Grid size={{ xs: 12, sm: 6, md: 3 }}>
         <Card>
           <CardContent>
             <Typography color="textSecondary" gutterBottom>
@@ -40,7 +40,7 @@ const DeAuthStats: React.FC<DeAuthStatsProps> = ({ stats, loading }) => {
           </CardContent>
         </Card>
       </Grid>
-      <Grid item xs={12} sm={6} md={3}>
+      <Grid size={{ xs: 12, sm: 6, md: 3 }}>
         <Card>
           <CardContent>
             <Typography color="textSecondary" gutterBottom>
@@ -52,7 +52,7 @@ const DeAuthStats: React.FC<DeAuthStatsProps> = ({ stats, loading }) => {
           </CardContent>
         </Card>
       </Grid>
-      <Grid item xs={12} sm={6} md={3}>
+      <Grid size={{ xs: 12, sm: 6, md: 3 }}>
         <Card>
           <CardContent>
             <Typography color="textSecondary" gutterBottom>
@@ -64,7 +64,7 @@ const DeAuthStats: React.FC<DeAuthStatsProps> = ({ stats, loading }) => {
           </CardContent>
         </Card>
       </Grid>
-      <Grid item xs={12} sm={6} md={3}>
+      <Grid size={{ xs: 12, sm: 6, md: 3 }}>
         <Card>
           <CardContent>
             <Typography color="textSecondary" gutterBottom>

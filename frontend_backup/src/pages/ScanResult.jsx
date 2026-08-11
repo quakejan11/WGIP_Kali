@@ -1,0 +1,1695 @@
+﻿import { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Divider,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+
+import FactCheckIcon from "@mui/icons-material/FactCheck";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import RouterIcon from "@mui/icons-material/Router";
+import TimelineIcon from "@mui/icons-material/Timeline";
+import DeviceHubIcon from "@mui/icons-material/DeviceHub";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import MapIcon from "@mui/icons-material/Map";
+import ManageSearchIcon from "@mui/icons-material/ManageSearch";
+
+import PageHeader from "../components/common/PageHeader";
+import ReviewFlowPanel from "../components/common/ReviewFlowPanel";
+import api from "../services/api";
+import {
+  UNKNOWN_MANUFACTURER,
+  formatManufacturerDisplay,
+  formatSecurityType,
+  getManufacturer,
+  getReadableLocation,
+  getSignalBandLabel,
+} from "../utils/wgipDisplay";
+
+/**
+ * safeDecode
+ *
+ * Ginagamit ito para i-decode yung URL parameter.
+ * Example:
+ * /scans/1 or /scans/SCAN%2001
+ *
+ * Nilagyan ng try/catch para hindi mag-crash page kapag invalid yung URL value.
+ */
+function safeDecode(value) {
+  if (!value) return "";
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * encodeParam
+ *
+ * Ginagamit kapag ilalagay ulit natin yung ID/MAC/BSSID sa URL.
+ * Important ito sa BSSID and MAC address kasi may ":" sila.
+ */
+function encodeParam(value) {
+  return encodeURIComponent(value || "");
+}
+
+/**
+ * normalizeRows
+ *
+ * Iba-iba minsan ang format ng API response.
+ * Minsan direct array, minsan nasa data/items/results.
+ *
+ * Purpose nito:
+ * gawing normal array lagi yung result para hindi paulit-ulit yung checking.
+ */
+function normalizeRows(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.surveys)) return data.surveys;
+  if (Array.isArray(data?.scans)) return data.scans;
+  if (Array.isArray(data?.observations)) return data.observations;
+  if (Array.isArray(data?.client_observations)) return data.client_observations;
+  if (Array.isArray(data?.devices)) return data.devices;
+
+  return [];
+}
+
+function getAny(row, keys, fallback = "") {
+  for (const key of keys) {
+    const value = row?.[key];
+
+    if (value !== null && value !== undefined && value !== "") {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+/**
+ * formatDate
+ *
+ * Converts timestamp/date value into readable local date/time.
+ * Kapag walang date, dash lang ang lalabas.
+ */
+function formatDate(value) {
+  if (!value) return "—";
+
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * formatScanCode
+ *
+ * Ginagamit para consistent ang scan label.
+ * Example:
+ * id 1 = SCAN-0001
+ */
+function formatScanCode(id) {
+  if (!id) return "SCAN-0000";
+  return `SCAN-${String(id).padStart(4, "0")}`;
+}
+
+/**
+ * isSameId
+ *
+ * Compares scan IDs safely.
+ * Ginawang string comparison para gumana kahit number yung isa
+ * and string naman yung isa.
+ */
+function isSameId(a, b) {
+  if (a === null || a === undefined || b === null || b === undefined) {
+    return false;
+  }
+
+  return String(a) === String(b);
+}
+
+/**
+ * getScanId
+ *
+ * Helper para kunin ang scan/survey ID kahit iba-iba ang field name
+ * galing backend.
+ */
+function getScanId(row) {
+  return row.id || row.survey_id || row.scan_id;
+}
+
+/**
+ * getScanName
+ *
+ * Helper para makakuha ng display name ng scan.
+ * Kapag walang custom name, fallback siya sa SCAN-0001 format.
+ */
+function getScanName(row) {
+  return (
+    row?.survey_name ||
+    row?.scan_name ||
+    row?.name ||
+    row?.title ||
+    (getScanId(row) ? formatScanCode(getScanId(row)) : "Untitled Scan")
+  );
+}
+
+/**
+ * getLocation
+ *
+ * Kinukuha yung readable location ng scan/record.
+ *
+ * Priority:
+ * 1. location_name / scan_location / area_label
+ * 2. city, province, country
+ * 3. coordinates
+ * 4. Unknown Location
+ */
+function getLocation(row) {
+  if (!row) return "Unknown Location";
+
+  if (row.location_name) return row.location_name;
+  if (row.scan_location) return row.scan_location;
+  if (row.area_label) return row.area_label;
+  if (row.location) return row.location;
+
+  const parts = [row.city, row.province, row.country].filter(Boolean);
+
+  if (parts.length > 0) return parts.join(", ");
+
+  if (
+    row.latitude !== null &&
+    row.latitude !== undefined &&
+    row.longitude !== null &&
+    row.longitude !== undefined
+  ) {
+    return `${Number(row.latitude).toFixed(5)}, ${Number(row.longitude).toFixed(
+      5
+    )}`;
+  }
+
+  return "Unknown Location";
+}
+
+/**
+ * getCoordinates
+ *
+ * Formats latitude/longitude for display.
+ * Hindi ito nagge-geocode. Display lang ng existing coordinates.
+ */
+function getCoordinates(row) {
+  if (!row) return "—";
+
+  if (
+    row.latitude === null ||
+    row.latitude === undefined ||
+    row.longitude === null ||
+    row.longitude === undefined
+  ) {
+    return "—";
+  }
+
+  return `${Number(row.latitude).toFixed(5)}, ${Number(row.longitude).toFixed(
+    5
+  )}`;
+}
+
+/**
+ * getBssid
+ *
+ * Kinukuha ang BSSID/AP identifier kahit iba-iba ang field name.
+ */
+function getBssid(row) {
+  return row.bssid || row.ap_bssid || row.BSSID || "—";
+}
+
+/**
+ * getSsid
+ *
+ * Kinukuha ang Wi-Fi name.
+ * Kapag hidden or missing, default display is Hidden/Unknown.
+ */
+function getSsid(row) {
+  return row.ssid || row.wifi_name || row.network_name || "Hidden/Unknown";
+}
+
+/**
+ * getClientMac
+ *
+ * Kinukuha ang observed device/client MAC.
+ * Note: observed device lang ito, hindi owner identity.
+ */
+function getClientMac(row) {
+  return row.client_mac || row.mac || row.device_mac || row.target_mac || "—";
+}
+
+/**
+ * getSignalValue
+ *
+ * Converts signal/rssi into number.
+ * Ginagamit for average signal computation.
+ */
+function getSignalValue(row) {
+  const signal = row.signal_dbm ?? row.rssi;
+
+  if (signal === null || signal === undefined || signal === "") return null;
+
+  const numberValue = Number(signal);
+
+  return Number.isNaN(numberValue) ? null : numberValue;
+}
+
+/**
+ * getSignalText
+ *
+ * Display helper for signal.
+ * Example: -55 dBm
+ */
+function getSignalText(row) {
+  const signal = getSignalValue(row);
+
+  if (signal === null) return "—";
+
+  return `${signal} dBm`;
+}
+
+/**
+ * getTime
+ *
+ * Kinukuha yung best timestamp field from the row.
+ */
+function getTime(row) {
+  return row.timestamp || row.created_at || row.last_seen || row.first_seen || null;
+}
+
+/**
+ * getRelationship
+ *
+ * For client observations, this shows relationship type.
+ * Example: observed, associated, nearby.
+ */
+function getRelationship(row) {
+  return row.relationship_type || row.relationship || "observed";
+}
+
+/**
+ * sortByTimeDesc
+ *
+ * Sorts records from newest to oldest.
+ * Ginagamit sa tables/timeline para latest muna.
+ */
+function sortByTimeDesc(rows) {
+  return [...rows].sort((a, b) => {
+    const timeA = getTime(a) ? new Date(getTime(a)).getTime() : 0;
+    const timeB = getTime(b) ? new Date(getTime(b)).getTime() : 0;
+
+    return timeB - timeA;
+  });
+}
+
+/**
+ * buildSurveyMap
+ *
+ * Gumagawa ng lookup map ng surveys/scans by ID.
+ * Purpose: mabilis mahanap yung scan info kapag may survey_id yung observation.
+ */
+function buildSurveyMap(surveys) {
+  const surveyMap = new globalThis.Map();
+
+  surveys.forEach((survey) => {
+    const surveyId = getScanId(survey);
+
+    if (!surveyId) return;
+
+    surveyMap.set(String(surveyId), survey);
+  });
+
+  return surveyMap;
+}
+
+/**
+ * enrichRowsWithSurvey
+ *
+ * Dinadagdagan ng scan details yung observation rows.
+ *
+ * Example:
+ * observation row only has survey_id.
+ * This function adds scan name, location, city, province, etc.
+ *
+ * Important ito para complete ang display sa Scan Result page.
+ */
+function enrichRowsWithSurvey(rows, surveys) {
+  const surveyMap = buildSurveyMap(surveys);
+
+  return rows.map((row) => {
+    const survey = surveyMap.get(String(row.survey_id || row.scan_id));
+
+    if (!survey) return row;
+
+    return {
+      ...row,
+      survey_name:
+        row.survey_name || row.scan_name || survey.survey_name || survey.name,
+      location_name:
+        row.location_name ||
+        row.scan_location ||
+        row.area_label ||
+        row.location ||
+        survey.location_name ||
+        survey.area_label ||
+        survey.location ||
+        survey.survey_name ||
+        survey.name,
+      latitude: row.latitude ?? survey.latitude,
+      longitude: row.longitude ?? survey.longitude,
+      city: row.city || survey.city,
+      province: row.province || survey.province,
+      country: row.country || survey.country,
+    };
+  });
+}
+
+/**
+ * groupNetworks
+ *
+ * Groups raw Wi-Fi observation records by BSSID.
+ *
+ * Purpose:
+ * Instead na maraming duplicate rows, magiging one row per BSSID sa Wi-Fi table.
+ *
+ * Also computes:
+ * - SSID names
+ * - channels
+ * - security/encryption
+ * - record count
+ * - average signal
+ * - linked observed device count
+ */
+function groupNetworks(observations, clientRows) {
+  const map = new globalThis.Map();
+
+  observations.forEach((row) => {
+    const bssid = getBssid(row);
+
+    if (!bssid || bssid === "—") return;
+
+    if (!map.has(bssid)) {
+      map.set(bssid, {
+        bssid,
+        ssids: new Set(),
+        channels: new Set(),
+        security: new Set(),
+        records: [],
+        signals: [],
+        lastSeen: null,
+      });
+    }
+
+    const item = map.get(bssid);
+
+    if (row.ssid) item.ssids.add(row.ssid);
+    if (row.channel) item.channels.add(row.channel);
+    if (row.encryption) item.security.add(row.encryption);
+
+    item.records.push(row);
+
+    const signal = getSignalValue(row);
+
+    if (signal !== null) item.signals.push(signal);
+
+    const time = getTime(row);
+
+    if (time) {
+      const currentTime = new Date(time).getTime();
+      const lastTime = item.lastSeen ? new Date(item.lastSeen).getTime() : 0;
+
+      if (!item.lastSeen || currentTime > lastTime) {
+        item.lastSeen = time;
+      }
+    }
+  });
+
+  return Array.from(map.values()).map((item) => {
+    const linkedDevices = new Set();
+
+    clientRows.forEach((clientRow) => {
+      if (getBssid(clientRow) === item.bssid) {
+        const clientMac = getClientMac(clientRow);
+
+        if (clientMac && clientMac !== "—") linkedDevices.add(clientMac);
+      }
+    });
+
+    const averageSignal =
+      item.signals.length > 0
+        ? Math.round(
+            item.signals.reduce((sum, signal) => sum + signal, 0) /
+              item.signals.length
+          )
+        : null;
+
+    return {
+      ...item,
+      ssidLabel:
+        item.ssids.size > 0 ? Array.from(item.ssids).join(", ") : "Hidden/Unknown",
+      channelLabel:
+        item.channels.size > 0 ? Array.from(item.channels).join(", ") : "—",
+      securityLabel:
+        item.security.size > 0 ? Array.from(item.security).join(", ") : "—",
+      averageSignal,
+      linkedDeviceCount: linkedDevices.size,
+    };
+  });
+}
+
+/**
+ * groupDevices
+ *
+ * Groups client observation rows by device MAC.
+ *
+ * Purpose:
+ * Ipakita sa scan kung anong observed devices ang nakita.
+ *
+ * Also checks:
+ * - ilang beses nakita sa scan
+ * - ilang BSSID na-link
+ * - average signal
+ * - nakita na ba siya before sa ibang scan
+ */
+function groupDevices(currentClientRows, allClientRows, scanId) {
+  const map = new globalThis.Map();
+
+  currentClientRows.forEach((row) => {
+    const clientMac = getClientMac(row);
+
+    if (!clientMac || clientMac === "—") return;
+
+    if (!map.has(clientMac)) {
+      map.set(clientMac, {
+        clientMac,
+        manufacturer: getManufacturer(row),
+        records: [],
+        bssids: new Set(),
+        ssids: new Set(),
+        signals: [],
+        lastSeen: null,
+        seenBefore: false,
+      });
+    }
+
+    const item = map.get(clientMac);
+
+    item.records.push(row);
+
+    const rowManufacturer = getManufacturer(row);
+
+    if (
+      item.manufacturer === UNKNOWN_MANUFACTURER &&
+      rowManufacturer !== UNKNOWN_MANUFACTURER
+    ) {
+      item.manufacturer = rowManufacturer;
+    }
+
+    const bssid = getBssid(row);
+    const ssid = getSsid(row);
+
+    if (bssid && bssid !== "—") item.bssids.add(bssid);
+    if (ssid && ssid !== "Hidden/Unknown") item.ssids.add(ssid);
+
+    const signal = getSignalValue(row);
+
+    if (signal !== null) item.signals.push(signal);
+
+    const time = getTime(row);
+
+    if (time) {
+      const currentTime = new Date(time).getTime();
+      const lastTime = item.lastSeen ? new Date(item.lastSeen).getTime() : 0;
+
+      if (!item.lastSeen || currentTime > lastTime) {
+        item.lastSeen = time;
+      }
+    }
+  });
+
+  return Array.from(map.values()).map((item) => {
+    /**
+     * seenBefore
+     *
+     * Checks kung yung same device MAC nakita rin sa ibang scan.
+     * This is useful for repeat detection / movement review.
+     */
+    const seenOutsideThisScan = allClientRows.some((row) => {
+      const rowMac = getClientMac(row);
+
+      if (String(rowMac).toLowerCase() !== String(item.clientMac).toLowerCase()) {
+        return false;
+      }
+
+      return !isSameId(row.survey_id || row.scan_id, scanId);
+    });
+
+    const averageSignal =
+      item.signals.length > 0
+        ? Math.round(
+            item.signals.reduce((sum, signal) => sum + signal, 0) /
+              item.signals.length
+          )
+        : null;
+
+    return {
+      ...item,
+      seenBefore: seenOutsideThisScan,
+      averageSignal,
+    };
+  });
+}
+
+/**
+ * SummaryCard
+ *
+ * Reusable small card for stats at the top of the page.
+ * Example:
+ * Wi-Fi Networks, Observation Records, Observed Devices, Review Items.
+ */
+function SummaryCard({ title, value, description }) {
+  return (
+    <Paper
+      sx={{
+        p: 2,
+        borderRadius: 3,
+        border: "1px solid",
+        borderColor: "divider",
+        bgcolor: "#ffffff",
+      }}
+    >
+      <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 400 }}>
+        {title}
+      </Typography>
+
+      <Typography variant="h4" sx={{ fontWeight: 600, my: 0.4 }}>
+        {value}
+      </Typography>
+
+      <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 400 }}>
+        {description}
+      </Typography>
+    </Paper>
+  );
+}
+
+/**
+ * ScanResult
+ *
+ * Main page for one scan result.
+ *
+ * Page route examples:
+ * - /scans/:id
+ * - /scan-results/:id
+ *
+ * Main responsibilities:
+ * - Load scan details
+ * - Load Wi-Fi observations
+ * - Load observed device/client rows
+ * - Group BSSID and devices
+ * - Show review items and timeline
+ */
+
+function getRecordManufacturerDisplay(records = []) {
+  const recordList = Array.isArray(records) ? records : [];
+
+  const manufacturer = recordList
+    .map((row) => getManufacturer(row))
+    .find((value) => value !== UNKNOWN_MANUFACTURER);
+
+  return formatManufacturerDisplay(manufacturer);
+}
+
+function getRecordSignalBandDisplay(records = [], fallbackChannel = "") {
+  const recordList = Array.isArray(records) ? records : [];
+
+  const signalSource =
+    recordList.find((row) =>
+      getAny(
+        row,
+        [
+          "frequency",
+          "freq",
+          "freq_mhz",
+          "frequency_mhz",
+          "channel",
+          "wifi_channel",
+          "radio_channel",
+        ],
+        ""
+      )
+    ) || {
+      channel: fallbackChannel,
+    };
+
+  return getSignalBandLabel(signalSource);
+}
+
+function getRecordLocationDisplay(records = []) {
+  const recordList = Array.isArray(records) ? records : [];
+
+  const locationSource =
+    recordList.find((row) => {
+      const location = getReadableLocation(row);
+      return (
+        location &&
+        location !== "No location available"
+      );
+    }) || recordList[0];
+
+  return locationSource
+    ? getReadableLocation(locationSource)
+    : "No location available";
+}
+
+export default function ScanResult() {
+  const params = useParams();
+
+  // Kunin yung scan ID from route params.
+  const scanId = safeDecode(
+    params.scanId || params.surveyId || params.id || params.scan_id || ""
+  );
+
+  // Main scan details.
+  const [scan, setScan] = useState(null);
+
+  // Raw Wi-Fi observation records for this scan.
+  const [observations, setObservations] = useState([]);
+
+  // Client/device observations for this scan only.
+  const [clientRows, setClientRows] = useState([]);
+
+  // All client/device observations from database.
+  // Ginagamit ito para malaman kung seen before yung device.
+  const [allClientRows, setAllClientRows] = useState([]);
+
+  // Page loading and error states.
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  /**
+   * loadScanResult
+   *
+   * Main API loader ng page.
+   *
+   * Dito gagalawin kapag:
+   * - nagpalit ng backend endpoint
+   * - nagpalit ng response format
+   * - may dagdag na data na kailangan sa scan result
+   */
+  async function loadScanResult() {
+    setLoading(true);
+    setErrorMessage("");
+
+    try {
+      let loadedSurveys = [];
+      let loadedScan = null;
+
+      /**
+       * Load scan details.
+       *
+       * First attempt: direct /surveys/:id
+       * Fallback: load all /surveys then hanapin yung matching scan ID.
+       */
+      try {
+        const surveyResponse = await api.get(`/surveys/${scanId}`);
+        loadedScan = surveyResponse.data;
+      } catch {
+        try {
+          const surveysResponse = await api.get("/surveys");
+          loadedSurveys = normalizeRows(surveysResponse.data);
+          loadedScan =
+            loadedSurveys.find((item) => isSameId(getScanId(item), scanId)) || null;
+        } catch {
+          loadedSurveys = [];
+        }
+      }
+
+      /**
+       * Load all surveys too.
+       *
+       * Needed for enriching rows with location/scan names.
+       */
+      if (loadedSurveys.length === 0) {
+        try {
+          const surveysResponse = await api.get("/surveys");
+          loadedSurveys = normalizeRows(surveysResponse.data);
+        } catch {
+          loadedSurveys = loadedScan ? [loadedScan] : [];
+        }
+      }
+
+      /**
+       * Load Wi-Fi observations for this scan.
+       *
+       * First attempt: filtered endpoint /observations?survey_id=
+       * Fallback: load all observations then frontend filter.
+       */
+      let loadedObservations = [];
+
+      try {
+        const observationsResponse = await api.get(
+          `/observations?survey_id=${encodeParam(scanId)}`
+        );
+
+        loadedObservations = normalizeRows(observationsResponse.data);
+      } catch {
+        try {
+          const observationsResponse = await api.get("/observations");
+          const allRows = normalizeRows(observationsResponse.data);
+
+          loadedObservations = allRows.filter((row) =>
+            isSameId(row.survey_id || row.scan_id, scanId)
+          );
+        } catch {
+          loadedObservations = [];
+        }
+      }
+
+      /**
+       * Load client/device observations.
+       *
+       * loadedClientRows = devices for this scan
+       * allLoadedClientRows = all devices from all scans
+       */
+      let loadedClientRows = [];
+      let allLoadedClientRows = [];
+
+      try {
+        const clientResponse = await api.get(
+          `/client-observations?survey_id=${encodeParam(scanId)}`
+        );
+
+        loadedClientRows = normalizeRows(clientResponse.data);
+      } catch {
+        loadedClientRows = [];
+      }
+
+      try {
+        const allClientResponse = await api.get("/client-observations");
+        allLoadedClientRows = normalizeRows(allClientResponse.data);
+
+        if (loadedClientRows.length === 0) {
+          loadedClientRows = allLoadedClientRows.filter((row) =>
+            isSameId(row.survey_id || row.scan_id, scanId)
+          );
+        }
+      } catch {
+        allLoadedClientRows = loadedClientRows;
+      }
+
+      /**
+       * Enrich rows with survey details.
+       *
+       * Para kahit survey_id lang ang record, may location/name pa rin sa UI.
+       */
+      const enrichedObservations = enrichRowsWithSurvey(
+        loadedObservations,
+        loadedSurveys
+      );
+
+      const enrichedClientRows = enrichRowsWithSurvey(
+        loadedClientRows,
+        loadedSurveys
+      );
+
+      const enrichedAllClientRows = enrichRowsWithSurvey(
+        allLoadedClientRows,
+        loadedSurveys
+      );
+
+      // Save loaded data into React state.
+      setScan(loadedScan);
+      setObservations(sortByTimeDesc(enrichedObservations));
+      setClientRows(sortByTimeDesc(enrichedClientRows));
+      setAllClientRows(sortByTimeDesc(enrichedAllClientRows));
+    } catch (error) {
+      setErrorMessage(
+        error?.response?.data?.detail ||
+          error?.message ||
+          "Failed to load scan result."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /**
+   * useEffect
+   *
+   * Auto-load scan result kapag binuksan ang page
+   * or kapag nagbago ang scanId.
+   */
+  useEffect(() => {
+    loadScanResult();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanId]);
+
+  /**
+   * currentScan
+   *
+   * Fallback scan object.
+   * Kapag hindi nakuha yung scan details from /surveys,
+   * gagawa tayo ng basic scan info using observations/client rows.
+   */
+  const currentScan = useMemo(() => {
+    if (scan) return scan;
+
+    if (observations.length > 0) {
+      return {
+        id: scanId,
+        survey_name: observations[0].survey_name || formatScanCode(scanId),
+        location_name: getLocation(observations[0]),
+        latitude: observations[0].latitude,
+        longitude: observations[0].longitude,
+      };
+    }
+
+    if (clientRows.length > 0) {
+      return {
+        id: scanId,
+        survey_name: clientRows[0].survey_name || formatScanCode(scanId),
+        location_name: getLocation(clientRows[0]),
+        latitude: clientRows[0].latitude,
+        longitude: clientRows[0].longitude,
+      };
+    }
+
+    return {
+      id: scanId,
+      survey_name: formatScanCode(scanId),
+    };
+  }, [scan, observations, clientRows, scanId]);
+
+  /**
+   * networks
+   *
+   * Grouped Wi-Fi/BSSID table data.
+   */
+  const networks = useMemo(() => {
+    return groupNetworks(observations, clientRows);
+  }, [observations, clientRows]);
+
+  /**
+   * devices
+   *
+   * Grouped observed device table data.
+   */
+  const devices = useMemo(() => {
+    return groupDevices(clientRows, allClientRows, scanId);
+  }, [clientRows, allClientRows, scanId]);
+
+  /**
+   * timelineRows
+   *
+   * Combined timeline of:
+   * - Wi-Fi network records
+   * - Observed device records
+   */
+  const timelineRows = useMemo(() => {
+    const observationTimeline = observations.map((row) => ({
+      type: "Wi-Fi Network",
+      time: getTime(row),
+      wifi: getSsid(row),
+      bssid: getBssid(row),
+      device: "—",
+      manufacturer: getManufacturer(row),
+      signal: getSignalText(row),
+      location: getLocation(row),
+      source: getScanName(row),
+    }));
+
+    const clientTimeline = clientRows.map((row) => ({
+      type: "Observed Device",
+      time: getTime(row),
+      wifi: getSsid(row),
+      bssid: getBssid(row),
+      device: getClientMac(row),
+      manufacturer: getManufacturer(row),
+      signal: getSignalText(row),
+      location: getLocation(row),
+      source: getRelationship(row),
+    }));
+
+    return sortByTimeDesc([...observationTimeline, ...clientTimeline]).slice(0, 12);
+  }, [observations, clientRows]);
+
+  /**
+   * reviewItems
+   *
+   * Auto-generated review notes for this scan.
+   * Example:
+   * - device seen before
+   * - BSSID has observed devices
+   */
+  const reviewItems = useMemo(() => {
+    const items = [];
+
+    devices.forEach((device) => {
+      if (device.seenBefore) {
+        items.push({
+          label: "Seen Before",
+          severity: "warning",
+          description: `${device.clientMac} was also observed in other scan records.`,
+        });
+      }
+    });
+
+    networks.forEach((network) => {
+      if (network.linkedDeviceCount > 0) {
+        items.push({
+          label: "Observed Devices",
+          severity: "info",
+          description: `${network.bssid} has ${network.linkedDeviceCount} observed device(s) in this scan.`,
+        });
+      }
+    });
+
+    return items.slice(0, 6);
+  }, [devices, networks]);
+
+  const scanLocation = getLocation(currentScan);
+  const scanCoordinates = getCoordinates(currentScan);
+
+  /**
+   * Primary records for quick action buttons.
+   * Kapag may network/device record, diretso sa related profile/timeline.
+   * Kapag wala, fallback to list pages.
+   */
+  const primaryBssid = networks.length > 0 ? networks[0].bssid : "";
+  const primaryDeviceMac = devices.length > 0 ? devices[0].clientMac : "";
+
+  return (
+    <Box sx={{ maxWidth: 1180 }}>
+      {/* Page title and top action buttons */}
+      <PageHeader
+        icon={<FactCheckIcon />}
+        title="Scan Result"
+        description="Readable overview of Wi-Fi networks, observed devices, security type, signal band, and review items for this scan."
+        actions={
+          <>
+            <Button
+              component={Link}
+              to="/scans"
+              variant="outlined"
+              startIcon={<ArrowBackIcon />}
+            >
+              Back to Scan Results
+            </Button>
+
+            <Button
+              component={Link}
+              to="/map"
+              variant="outlined"
+              startIcon={<MapIcon />}
+            >
+              View Map
+            </Button>
+
+            <Button
+              onClick={loadScanResult}
+              variant="outlined"
+              startIcon={<RefreshIcon />}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
+
+      {/* Collapsible guide para hindi masyadong mahaba yung page */}
+      <ReviewFlowPanel
+        title="Scan Review Flow"
+        description="Use this order when reviewing a scan result."
+        steps={[
+          {
+            number: 1,
+            title: "Scan Result",
+            description: "Review scan summary and records.",
+            active: true,
+          },
+          {
+            number: 2,
+            title: "Wi-Fi Profile",
+            description: "Open a related Wi-Fi identity.",
+            to: primaryBssid ? `/bssids/${encodeParam(primaryBssid)}` : "/bssid-history",
+          },
+          {
+            number: 3,
+            title: "Device Timeline",
+            description: "Review observed device history.",
+            to: primaryDeviceMac
+              ? `/clients/${encodeParam(primaryDeviceMac)}/timeline`
+              : "/devices",
+          },
+          {
+            number: 4,
+            title: "Map Review",
+            description: "Check observed locations.",
+            to: "/map",
+          },
+          {
+            number: 5,
+            title: "Review Items",
+            description: "Open important findings.",
+            to: "/signals",
+          },
+        ]}
+      />
+
+      {/* Error message kapag may failed API load */}
+      {errorMessage && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {errorMessage}
+        </Alert>
+      )}
+
+      {loading ? (
+        // Loading state habang kinukuha data from backend.
+        <Stack sx={{ alignItems: "center" }} justifyContent="center" sx={{ py: 8 }}>
+          <CircularProgress size={28} />
+
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+            Loading scan result...
+          </Typography>
+        </Stack>
+      ) : (
+        <>
+          {/* Main scan info card */}
+          <Paper
+            sx={{
+              p: 2,
+              mb: 2,
+              borderRadius: 3,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "#ffffff",
+            }}
+          >
+            <Stack
+              direction={{ xs: "column", md: "row" }}
+              justifyContent="space-between"
+              sx={{ alignItems: { xs: "flex-start", md: "center" } }}
+              spacing={1.5}
+            >
+              <Box>
+                <Typography variant="h5" sx={{ fontWeight: 600, mb: 0.4 }}>
+                  {getScanName(currentScan)}
+                </Typography>
+
+                <Typography variant="body2" color="text.secondary">
+                  {formatScanCode(scanId)} • {scanLocation}
+                </Typography>
+
+                <Typography variant="body2" color="text.secondary">
+                  Coordinates: {scanCoordinates}
+                </Typography>
+              </Box>
+
+              {/* Quick summary chips */}
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Chip label={`${observations.length} Wi-Fi detection record(s)`} />
+
+                <Chip label={`${networks.length} Wi-Fi Device ID(s)`} variant="outlined" />
+
+                <Chip label={`${devices.length} observed device(s)`} variant="outlined" />
+
+                <Chip label={`${reviewItems.length} review item(s)`} variant="outlined" />
+              </Stack>
+            </Stack>
+          </Paper>
+
+          {/* Summary statistic cards */}
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: {
+                xs: "1fr",
+                sm: "1fr 1fr",
+                lg: "repeat(4, 1fr)",
+              },
+              gap: 2,
+              mb: 2,
+            }}
+          >
+            <SummaryCard
+              title="Wi-Fi Networks"
+              value={networks.length}
+              description="Unique Wi-Fi Device IDs (BSSID)"
+            />
+
+            <SummaryCard
+              title="Observation Records"
+              value={observations.length}
+              description="Imported Wi-Fi detection records"
+            />
+
+            <SummaryCard
+              title="Observed Devices"
+              value={devices.length}
+              description="Client devices seen in this scan"
+            />
+
+            <SummaryCard
+              title="Review Items"
+              value={reviewItems.length}
+              description="Items that may need checking"
+            />
+          </Box>
+
+          {/* Quick action shortcuts */}
+          <Paper
+            sx={{
+              mb: 2,
+              p: 2,
+              borderRadius: 3,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "#ffffff",
+            }}
+          >
+            <Stack
+              direction={{ xs: "column", md: "row" }}
+              justifyContent="space-between"
+              sx={{ alignItems: { xs: "stretch", md: "center" } }}
+              spacing={1.5}
+            >
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  Quick Actions
+                </Typography>
+
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ fontWeight: 400 }}
+                >
+                  Continue reviewing this scan using related pages.
+                </Typography>
+              </Box>
+
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Button
+                  component={Link}
+                  to={primaryBssid ? `/bssids/${encodeParam(primaryBssid)}` : "/bssid-history"}
+                  variant="outlined"
+                  startIcon={<RouterIcon />}
+                >
+                  Wi-Fi Profile
+                </Button>
+
+                <Button
+                  component={Link}
+                  to={
+                    primaryDeviceMac
+                      ? `/clients/${encodeParam(primaryDeviceMac)}/timeline`
+                      : "/devices"
+                  }
+                  variant="outlined"
+                  startIcon={<TimelineIcon />}
+                >
+                  Device Timeline
+                </Button>
+
+                <Button
+                  component={Link}
+                  to="/signals"
+                  variant="outlined"
+                  startIcon={<ManageSearchIcon />}
+                >
+                  Review Items
+                </Button>
+              </Stack>
+            </Stack>
+          </Paper>
+
+          {/* Wi-Fi/BSSID table */}
+          <Paper
+            sx={{
+              mb: 2,
+              borderRadius: 3,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "#ffffff",
+              overflow: "hidden",
+            }}
+          >
+            <Box sx={{ p: 2 }}>
+              <Stack direction="row" spacing={1.2} sx={{ alignItems: "center" }}>
+                <RouterIcon color="primary" fontSize="small" />
+
+                <Box>
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    Wi-Fi Networks
+                  </Typography>
+
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ fontWeight: 400 }}
+                  >
+                    Wi-Fi networks observed in this scan, shown with manufacturer, security, band, and location details.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+
+            <Divider />
+
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Wi-Fi Name</TableCell>
+                    <TableCell>Wi-Fi Device ID (BSSID)</TableCell>
+                    <TableCell>Manufacturer</TableCell>
+                    <TableCell>Band</TableCell>
+                    <TableCell>Security</TableCell>
+                    <TableCell align="center">Records</TableCell>
+                    <TableCell align="center">Observed Devices</TableCell>
+                    <TableCell>Signal Level (dBm)</TableCell>
+                    <TableCell>Location</TableCell>
+                    <TableCell>Last Seen</TableCell>
+                    <TableCell align="right">Action</TableCell>
+                  </TableRow>
+                </TableHead>
+
+                <TableBody>
+                  {networks.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={11}>
+                        <Box sx={{ py: 5, textAlign: "center" }}>
+                          <Typography variant="h6" sx={{ fontWeight: 500 }}>
+                            No Wi-Fi networks found.
+                          </Typography>
+
+                          <Typography variant="body2" color="text.secondary">
+                            No observation rows were returned for this scan.
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    networks.map((network) => (
+                      <TableRow key={network.bssid} hover>
+                     <TableCell>
+                       <Typography
+                         variant="body2"
+                         sx={{ fontWeight: 700 }}
+                       >
+                         {network.ssidLabel || "Hidden/Unknown"}
+                       </Typography>
+
+                       <Typography
+                         variant="caption"
+                         color="text.secondary"
+                       >
+                         Wi-Fi Name (SSID)
+                       </Typography>
+                     </TableCell>
+
+                     <TableCell>
+                       <Typography
+                         variant="body2"
+                         fontFamily="monospace"
+                         sx={{ fontWeight: 600 }}
+                       >
+                         {network.bssid}
+                       </Typography>
+                     </TableCell>
+
+                     <TableCell>
+                       {getRecordManufacturerDisplay(network.records)}
+                     </TableCell>
+
+                     <TableCell>
+                       <Chip
+                         label={getRecordSignalBandDisplay(
+                           network.records,
+                           network.channelLabel
+                         )}
+                         size="small"
+                         variant="outlined"
+                       />
+                     </TableCell>
+
+                     <TableCell>
+                       {formatSecurityType(network.securityLabel)}
+                     </TableCell>
+
+                     <TableCell align="center">
+                       {network.records.length}
+                     </TableCell>
+
+                     <TableCell align="center">
+                       {network.linkedDeviceCount}
+                     </TableCell>
+
+                     <TableCell>
+                       {network.averageSignal !== null
+                         ? `${network.averageSignal} dBm`
+                         : "—"}
+                     </TableCell>
+
+                     <TableCell>
+                       {getRecordLocationDisplay(network.records)}
+                     </TableCell>
+
+                     <TableCell>
+                       {formatDate(network.lastSeen)}
+                     </TableCell>
+
+                     <TableCell align="right">
+                       <Button
+                         component={Link}
+                         to={`/bssids/${encodeParam(network.bssid)}`}
+                         variant="outlined"
+                         startIcon={<VisibilityIcon />}
+                       >
+                         Profile
+                       </Button>
+                     </TableCell>
+                   </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
+          {/* Observed devices table */}
+          <Paper
+            sx={{
+              mb: 2,
+              borderRadius: 3,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "#ffffff",
+              overflow: "hidden",
+            }}
+          >
+            <Box sx={{ p: 2 }}>
+              <Stack direction="row" spacing={1.2} sx={{ alignItems: "center" }}>
+                <DeviceHubIcon color="primary" fontSize="small" />
+
+                <Box>
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    Observed Devices
+                  </Typography>
+
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ fontWeight: 400 }}
+                  >
+                    Client devices observed in this imported scan data.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+
+            <Divider />
+
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Device ID (MAC Address)</TableCell>
+                    <TableCell>Manufacturer</TableCell>
+                    <TableCell align="center">Seen Count</TableCell>
+                    <TableCell align="center">Linked Wi-Fi IDs (BSSID)</TableCell>
+                    <TableCell>Signal Level (dBm)</TableCell>
+                    <TableCell>Last Seen</TableCell>
+                    <TableCell>Review Status</TableCell>
+                    <TableCell align="right">Action</TableCell>
+                  </TableRow>
+                </TableHead>
+
+                <TableBody>
+                  {devices.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8}>
+                        <Box sx={{ py: 5, textAlign: "center" }}>
+                          <Typography variant="h6" sx={{ fontWeight: 500 }}>
+                            No observed devices found.
+                          </Typography>
+
+                          <Typography variant="body2" color="text.secondary">
+                            No client observation rows were returned for this scan.
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    devices.map((device) => (
+                      <TableRow key={device.clientMac} hover>
+                        <TableCell>
+                          <Typography
+                            variant="body2"
+                            fontFamily="monospace"
+                            sx={{ fontWeight: 500 }}
+                          >
+                            {device.clientMac}
+                          </Typography>
+                        </TableCell>
+
+                        <TableCell>{device.manufacturer}</TableCell>
+
+                        <TableCell align="center">
+                          {device.records.length}
+                        </TableCell>
+
+                        <TableCell align="center">
+                          {device.bssids.size}
+                        </TableCell>
+
+                        <TableCell>
+                          {device.averageSignal !== null
+                            ? `${device.averageSignal} dBm`
+                            : "—"}
+                        </TableCell>
+
+                        <TableCell>{formatDate(device.lastSeen)}</TableCell>
+
+                        <TableCell>
+                          <Chip
+                            label={device.seenBefore ? "Seen Before" : "First Time Seen"}
+                            color={device.seenBefore ? "warning" : "success"}
+                          />
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            justifyContent="flex-end"
+                            flexWrap="wrap"
+                          >
+                            <Button
+                              component={Link}
+                              to={`/clients/${encodeParam(device.clientMac)}/timeline`}
+                              variant="outlined"
+                              startIcon={<TimelineIcon />}
+                            >
+                              Timeline
+                            </Button>
+
+                            <Button
+                              component={Link}
+                              to={`/devices/${encodeParam(
+                                device.clientMac
+                              )}/link-analysis`}
+                              variant="outlined"
+                              startIcon={<DeviceHubIcon />}
+                            >
+                              Link
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
+          {/* Bottom section: review items + timeline */}
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: {
+                xs: "1fr",
+                lg: "0.85fr 1.15fr",
+              },
+              gap: 2,
+            }}
+          >
+            {/* Review items generated from scan data */}
+            <Paper
+              sx={{
+                borderRadius: 3,
+                border: "1px solid",
+                borderColor: "divider",
+                bgcolor: "#ffffff",
+                overflow: "hidden",
+              }}
+            >
+              <Box sx={{ p: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  Review Items
+                </Typography>
+
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ fontWeight: 400 }}
+                >
+                  Items from this scan that may need further review.
+                </Typography>
+              </Box>
+
+              <Divider />
+
+              {reviewItems.length === 0 ? (
+                <Box sx={{ p: 2 }}>
+                  <Alert severity="success">
+                    No review items were generated for this scan.
+                  </Alert>
+                </Box>
+              ) : (
+                <Stack spacing={1} sx={{ p: 2 }}>
+                  {reviewItems.map((item, index) => (
+                    <Alert key={`${item.label}-${index}`} severity={item.severity}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {item.label}
+                      </Typography>
+
+                      <Typography variant="body2">{item.description}</Typography>
+                    </Alert>
+                  ))}
+                </Stack>
+              )}
+            </Paper>
+
+            {/* Latest timeline records for this scan */}
+            <Paper
+              sx={{
+                borderRadius: 3,
+                border: "1px solid",
+                borderColor: "divider",
+                bgcolor: "#ffffff",
+                overflow: "hidden",
+              }}
+            >
+              <Box sx={{ p: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  Timeline History
+                </Typography>
+
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ fontWeight: 400 }}
+                >
+                  Recent time-based records from this scan.
+                </Typography>
+              </Box>
+
+              <Divider />
+
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Time</TableCell>
+                      <TableCell>Type</TableCell>
+                      <TableCell>Wi-Fi</TableCell>
+                      <TableCell>Wi-Fi Device ID (BSSID)</TableCell>
+                      <TableCell>Device ID (MAC Address)</TableCell>
+                      <TableCell>Manufacturer</TableCell>
+                      <TableCell>Signal Level (dBm)</TableCell>
+                    </TableRow>
+                  </TableHead>
+
+                  <TableBody>
+                    {timelineRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7}>
+                          <Box sx={{ py: 4, textAlign: "center" }}>
+                            <Typography variant="body2" color="text.secondary">
+                              No timeline records available.
+                            </Typography>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      timelineRows.map((row, index) => (
+                        <TableRow key={`${row.type}-${index}`} hover>
+                          <TableCell>{formatDate(row.time)}</TableCell>
+
+                          <TableCell>{row.type}</TableCell>
+
+                          <TableCell>{row.wifi}</TableCell>
+
+                          <TableCell>
+                            <Typography
+                              variant="body2"
+                              fontFamily="monospace"
+                              sx={{ fontWeight: 500 }}
+                            >
+                              {row.bssid}
+                            </Typography>
+                          </TableCell>
+
+                          <TableCell>
+                            <Typography
+                              variant="body2"
+                              fontFamily={row.device !== "—" ? "monospace" : "inherit"}
+                              sx={{ fontWeight: row.device !== "—" ? 500 : 400 }}
+                            >
+                              {row.device}
+                            </Typography>
+                          </TableCell>
+
+                          <TableCell>{row.manufacturer}</TableCell>
+
+                          <TableCell>{row.signal}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+}

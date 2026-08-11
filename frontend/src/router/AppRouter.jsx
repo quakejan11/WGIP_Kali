@@ -15,9 +15,14 @@ import ClientDeviceTimeline from "../pages/ClientDeviceTimeline";
 import DeviceLinkAnalysis from "../pages/DeviceLinkAnalysis";
 import Alerts from "../pages/Alerts";
 import Settings from "../pages/Settings";
-import DeAuthPage from "../pages/DeAuthPage";
-
+import MonitorPage from "../pages/MonitorPage";
 import TrackedDevices from "../pages/TrackedDevices";
+
+// Import LiveScanning
+import LiveScanning from "../pages/LiveScanning";
+import DeAuth from "../pages/DeAuth";
+import SignalMap from "../pages/SignalMap";
+
 export default function AppRouter() {
   return (
     <BrowserRouter>
@@ -55,7 +60,13 @@ export default function AppRouter() {
           />
 
           <Route path="/alerts" element={<Alerts />} />
-	  <Route path="/deauth" element={<DeAuthPage />} />
+          <Route path="/deauth" element={<DeAuth />} />
+          <Route path="/monitor" element={<MonitorPage />} />
+          <Route path="/signal-map" element={<SignalMap />} />
+         
+          {/* Live Scanning Route */}
+          <Route path="/live-scanning" element={<LiveScanning />} />
+          
           <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>

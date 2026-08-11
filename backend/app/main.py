@@ -1,4 +1,4 @@
-﻿import importlib
+import importlib
 import pkgutil
 
 from fastapi import FastAPI
@@ -80,3 +80,15 @@ app.include_router(scan_reports_router)
 app.include_router(device_reports_router)
 app.include_router(wifi_reports_router)
 app.include_router(deauth_router)
+
+# Import and include live router
+from app.api.live import router as live_router
+app.include_router(live_router)
+
+# Import and include interfaces router
+from app.api.interfaces import router as interfaces_router
+app.include_router(interfaces_router)
+
+# Import and include kismet router
+from app.api.kismet import router as kismet_router
+app.include_router(kismet_router)

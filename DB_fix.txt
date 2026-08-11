@@ -1,0 +1,122 @@
+================================================================================
+              DROP AND RECREATE POSTGRESQL DATABASE FOR WGIP
+              Complete step-by-step commands
+================================================================================
+
+This will completely remove your existing 'postgis_wgip' database and create
+a fresh one with PostGIS enabled. Use this if you want to start clean or
+restore from a backup.
+
+================================================================================
+STEP 1: DROP THE EXISTING DATABASE
+================================================================================
+
+# Drop the existing database (this removes ALL data!)
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS postgis_wgip;"
+
+================================================================================
+STEP 2: CREATE A FRESH DATABASE
+================================================================================
+
+# Create a new empty database
+sudo -u postgres psql -c "CREATE DATABASE postgis_wgip;"
+
+================================================================================
+STEP 3: ENABLE POSTGIS EXTENSION
+================================================================================
+
+# Enable PostGIS for geospatial data support
+sudo -u postgres psql -d postgis_wgip -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+
+================================================================================
+STEP 4: VERIFY THE DATABASE IS EMPTY
+================================================================================
+
+# Check if any tables exist (should show "No relations found")
+sudo -u postgres psql -d postgis_wgip -c "\dt"
+
+================================================================================
+STEP 5: RUN ALEMBIC MIGRATIONS (IF NEEDED)
+================================================================================
+
+# Navigate to backend folder
+cd ~/Desktop/Integrated/backend
+
+# Run all migrations from scratch
+python -m alembic upgrade head
+
+================================================================================
+STEP 6: VERIFY ALL TABLES WERE CREATED
+================================================================================
+
+# List all tables
+sudo -u postgres psql -d postgis_wgip -c "\dt"
+
+================================================================================
+STEP 7: RESTORE FROM BACKUP (OPTIONAL)
+================================================================================
+
+# If you have a backup file, restore it:
+# Replace the path with your actual backup file location
+sudo -u postgres psql -d postgis_wgip < /home/enigma/Videos/wgip_backup_20260806_115013.sql
+
+# Or if it's a custom format backup, use pg_restore:
+pg_restore -h localhost -U postgres -d postgis_wgip /home/enigma/Videos/wgip_backup_20260806_115013.sql
+
+================================================================================
+COMPLETE ONE-LINE COMMAND SEQUENCE
+================================================================================
+
+# Run all steps at once (without backup)
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS postgis_wgip;" && \
+sudo -u postgres psql -c "CREATE DATABASE postgis_wgip;" && \
+sudo -u postgres psql -d postgis_wgip -c "CREATE EXTENSION IF NOT EXISTS postgis;" && \
+cd ~/Desktop/Integrated/backend && \
+python -m alembic upgrade head && \
+sudo -u postgres psql -d postgis_wgip -c "\dt"
+
+================================================================================
+QUICK REFERENCE - COMMANDS ONLY
+================================================================================
+
+# Drop and recreate database
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS postgis_wgip;"
+sudo -u postgres psql -c "CREATE DATABASE postgis_wgip;"
+sudo -u postgres psql -d postgis_wgip -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+
+# Run migrations
+cd ~/Desktop/Integrated/backend
+python -m alembic upgrade head
+
+# Verify tables
+sudo -u postgres psql -d postgis_wgip -c "\dt"
+
+# Restore from backup (optional)
+sudo -u postgres psql -d postgis_wgip < /path/to/your/backup.sql
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+If you get "database is being accessed by other users":
+
+# Disconnect all users first
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'postgis_wgip' AND pid <> pg_backend_pid();"
+
+# Then drop the database
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS postgis_wgip;"
+
+If Alembic shows "No such revision" error:
+
+# Stamp to head
+python -m alembic stamp head
+
+If you see "relation already exists" during migrations:
+
+# Drop all tables manually
+sudo -u postgres psql -d postgis_wgip -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO postgres; GRANT ALL ON SCHEMA public TO public;"
+# Then re-run migrations
+
+================================================================================
+                              END OF COMMANDS
+================================================================================

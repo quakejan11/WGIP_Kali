@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 import sys
 from pathlib import Path
+import time
 
 # Ensure app is in path if running from scripts
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -48,6 +49,31 @@ class KismetConnector:
             normalized.append(obs)
         
         return normalized
+    
+    def get_last_packet_time(self):
+        """Get the timestamp of the last packet from Kismet"""
+        try:
+            response = self.session.get(
+                f"{self.kismet_url}/devices/views/last-time",
+                params={"duration": 60}
+            )
+            if response.status_code == 200:
+                raw_data = response.json()
+                last_times = []
+                for device in raw_data:
+                    # Kismet timestamp is in microseconds since Unix epoch
+                    last_time = device.get("kismet.device.base.last-time")
+                    if last_time is not None:
+                        last_times.append(int(last_time))
+                if last_times:
+                    return max(last_times)  # Return the most recent timestamp in microseconds
+                else:
+                    return None
+            else:
+                return None
+        except Exception as e:
+            print(f"Error getting last packet time: {e}")
+            return None
     
     def _detect_encryption(self, device):
         """Detect encryption type from Kismet data"""

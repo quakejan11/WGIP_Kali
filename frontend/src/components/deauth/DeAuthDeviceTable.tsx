@@ -42,7 +42,7 @@ const getStatusIcon = (status: string) => {
     case 'pending': return <Info fontSize="small" />;
     case 'deauthenticated': return <CheckCircle fontSize="small" />;
     case 'blocked': return <Error fontSize="small" />;
-    default: return null;
+    default: return undefined;
   }
 };
 
@@ -89,7 +89,7 @@ const DeAuthDeviceTable: React.FC<DeAuthDeviceTableProps> = ({
             {devices.map((device) => (
               <TableRow key={device.id} hover>
                 <TableCell>
-                  <Typography variant="body2" fontFamily="monospace" fontSize="13px">
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '13px' }}>
                     {device.client_mac}
                   </Typography>
                 </TableCell>
@@ -108,7 +108,7 @@ const DeAuthDeviceTable: React.FC<DeAuthDeviceTableProps> = ({
                 </TableCell>
                 <TableCell align="center">{device.deauth_count}</TableCell>
                 <TableCell>
-                  {device.last_deauth_attempt
+                  {device.last_deauth_attempt 
                     ? new Date(device.last_deauth_attempt).toLocaleString()
                     : '-'}
                 </TableCell>

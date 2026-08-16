@@ -48,20 +48,11 @@ const menuItems = [
   { label: "Map", path: "/map", icon: <MapIcon /> },
   { label: "Review Items", path: "/signals", icon: <ManageSearchIcon /> },
   { label: "Observations", path: "/observations", icon: <StorageIcon /> },
-  {
-    label: "Live Operation",
-    icon: <WifiIcon />,
-    children: [
-      { label: "Live Scan", path: "/live-operation/scan", icon: <SignalCellularAltIcon /> },
+  { label: "Monitoring", icon: <SecurityIcon />, children: [
+      { label: "Live Scanning", path: "/live-operation/scan", icon: <SignalCellularAltIcon /> },
       { label: "DeAuth Monitor", path: "/live-operation/deauth", icon: <WifiOffIcon /> },
       { label: "Signal Map", path: "/live-operation/map", icon: <GpsFixedIcon /> },
-    ],
-  },
-  { label: "Monitoring", icon: <SecurityIcon />, children: [
-      { label: "Live Scanning", path: "/live-scanning", icon: <SignalCellularAltIcon /> },
-      { label: "DeAuth", path: "/deauth", icon: <WifiOffIcon /> },
-      { label: "Signal Map", path: "/signal-map", icon: <GpsFixedIcon /> },
-    ]},
+  ]},
   { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
 ];
 
@@ -91,7 +82,6 @@ export default function MainLayout({ children }) {
   
   // State for expanded/collapsed menu items
   const [expandedMenus, setExpandedMenus] = useState({
-    "Live Operation": true, // Live Operation is expanded by default
     Monitoring: true, // Monitoring is expanded by default
   });
 

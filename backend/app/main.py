@@ -15,28 +15,34 @@ from app.api.device_reports import router as device_reports_router
 from app.api.wifi_reports import router as wifi_reports_router
 from app.api.deauth import router as deauth_router
 
+# Import live, interfaces, and kismet routers - ALL from app.api
+from app.api.live import router as live_router
+from app.api.interfaces import router as interfaces_router  # Changed from app.routers
+from app.api.kismet import router as kismet_router          # Changed from app.routers
+
 app = FastAPI(
     title="WGIP API",
     description="Wireless Geospatial Intelligence Platform API",
     version="0.1.0",
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:3000",      # Vite default
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
         "http://localhost:5175",
         "http://127.0.0.1:5175",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.get("/")
 def root():
@@ -48,9 +54,11 @@ def root():
             "important_signals",
             "scan_results",
             "device_link_analysis",
+            "live",
+            "interfaces",
+            "kismet",
         ],
     }
-
 
 def include_existing_route_modules() -> None:
     import app.api.routes as routes_package
@@ -67,9 +75,9 @@ def include_existing_route_modules() -> None:
         if router is not None:
             app.include_router(router)
 
-
 include_existing_route_modules()
 
+# Register all routers
 app.include_router(client_observations_router)
 app.include_router(important_signals_router)
 app.include_router(scan_results_router)
@@ -80,15 +88,6 @@ app.include_router(scan_reports_router)
 app.include_router(device_reports_router)
 app.include_router(wifi_reports_router)
 app.include_router(deauth_router)
-
-# Import and include live router
-from app.api.live import router as live_router
 app.include_router(live_router)
-
-# Import and include interfaces router
-from app.api.interfaces import router as interfaces_router
-app.include_router(interfaces_router)
-
-# Import and include kismet router
-from app.api.kismet import router as kismet_router
-app.include_router(kismet_router)
+app.include_router(interfaces_router)  # Now from app.api
+app.include_router(kismet_router)      # Now from app.api

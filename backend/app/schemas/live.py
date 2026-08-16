@@ -15,11 +15,11 @@ class LiveEventCreate(LiveEventBase):
     pass
 
 class LiveEventResponse(LiveEventBase):
-    id: int
-    created_at: datetime
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class LiveEventsResponse(BaseModel):
     events: List[LiveEventResponse]

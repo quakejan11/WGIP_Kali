@@ -62,14 +62,15 @@ export default function AppRouter() {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/monitor" element={<MonitorPage />} />
           
-          {/* Live Operation Routes - FIXED */}
+          {/* Live Operation Routes - WITH Sidebar */}
           <Route path="/live-operation" element={<LiveOperation />}>
             <Route index element={<LiveScan />} />
-            {/* ✅ Removed leading slashes from child routes */}
-            <Route path="scan" element={<LiveScan />} />
             <Route path="deauth" element={<DeAuthMonitor />} />
             <Route path="map" element={<SignalMap />} />
           </Route>
+          
+          {/* ✅ Scan route WITHOUT sidebar - just the table */}
+          <Route path="/live-operation/scan" element={<LiveScan />} />
           
           <Route path="/settings" element={<Settings />} />
         </Route>

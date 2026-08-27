@@ -12,6 +12,8 @@ import os
 import glob
 import sqlite3
 import time
+import websocket
+import threading
 
 router = APIRouter(prefix="/api/live", tags=["live"])
 
@@ -21,6 +23,11 @@ kismet_connector = KismetConnector()
 # Cache for data
 cached_networks = []
 cache_time = None
+ws_connected = False
+ws_data = []
+
+# WebSocket stop flag
+STOP_WEBSOCKET = False
 
 def decode_bytes(value):
     """Safely decode bytes to string"""
@@ -38,19 +45,15 @@ def extract_device_info(device_json):
         elif isinstance(device_json, bytes):
             data = json.loads(device_json.decode('utf-8', errors='ignore'))
         else:
-            return None, None
+            return None, None, 1, 'Unknown', -60
         
-        # Extract name
         name = data.get('kismet.device.base.name', '')
         if not name:
             name = data.get('kismet.device.base.commonname', '')
         if not name:
             name = data.get('kismet.device.base.macaddr', '')
         
-        # Extract vendor/manufacturer
         vendor = data.get('kismet.device.base.manuf', '')
-        
-        # Extract channel
         channel = data.get('kismet.device.base.channel', 1)
         if isinstance(channel, str):
             try:
@@ -58,13 +61,10 @@ def extract_device_info(device_json):
             except:
                 channel = 1
         
-        # Extract encryption
         encryption = data.get('kismet.device.base.crypt', 'Unknown')
         if encryption and encryption != '':
-            # Clean up the encryption string
             encryption = encryption.replace(' ', ' ').strip()
         
-        # Extract signal
         signal = data.get('kismet.device.base.signal', {})
         if isinstance(signal, dict):
             signal = signal.get('kismet.common.signal.last_signal', -60)
@@ -73,43 +73,175 @@ def extract_device_info(device_json):
     except:
         return None, None, 1, 'Unknown', -60
 
+def stop_websocket_connections():
+    """Stop all WebSocket connections"""
+    global STOP_WEBSOCKET
+    STOP_WEBSOCKET = True
+    print("⏹️ WebSocket stop flag set")
+
+def reset_websocket_flag():
+    """Reset the WebSocket stop flag"""
+    global STOP_WEBSOCKET
+    STOP_WEBSOCKET = False
+    print("🔄 WebSocket stop flag reset")
+
+def get_networks_from_websocket():
+    """Fetch networks via Kismet WebSocket API"""
+    global STOP_WEBSOCKET
+    
+    # Check if we should stop
+    if STOP_WEBSOCKET:
+        print("⏹️ WebSocket connection stopped by user")
+        return []
+    
+    try:
+        import websocket
+        import json
+        
+        # Use the correct credentials from auth file
+        username = "enigma"
+        password = "011101"
+        
+        ws_url = f"ws://localhost:2501/eventbus/events.ws?user={username}&password={password}"
+        print(f"🔍 Connecting to WebSocket with username: {username}")
+        
+        ws = websocket.create_connection(ws_url, timeout=5)
+        print("✅ Connected to WebSocket")
+        
+        # Send GET_DEVICES command
+        msg = {
+            "cmd": "GET_DEVICES",
+            "fields": [
+                "kismet.device.base.name",
+                "kismet.device.base.macaddr",
+                "kismet.device.base.signal/kismet.device.base.signal_dbm",
+                "kismet.device.base.channel",
+                "kismet.device.base.encryption",
+                "kismet.device.base.vendor",
+                "kismet.device.base.type"
+            ]
+        }
+        
+        ws.send(json.dumps(msg))
+        print("📤 Sent GET_DEVICES request")
+        
+        ws.settimeout(5)
+        response = ws.recv()
+        ws.close()
+        
+        if response:
+            print("📥 Received response")
+            data = json.loads(response)
+            events = []
+            
+            if isinstance(data, list):
+                for device in data:
+                    device_type = device.get('kismet.device.base.type', '')
+                    if device_type == 'Wi-Fi AP' or device_type == 'ap':
+                        bssid = device.get('kismet.device.base.macaddr', '')
+                        if not bssid or bssid == '00:00:00:00:00:00':
+                            continue
+                        
+                        signal_data = device.get('kismet.device.base.signal', {})
+                        if isinstance(signal_data, dict):
+                            signal = signal_data.get('kismet.common.signal.last_signal', -60)
+                        else:
+                            signal = -60
+                        
+                        events.append({
+                            "bssid": bssid,
+                            "essid": device.get('kismet.device.base.name', 'Unknown'),
+                            "channel": device.get('kismet.device.base.channel', 1),
+                            "signal": signal,
+                            "security": device.get('kismet.device.base.encryption', 'Unknown'),
+                            "clients": 0,
+                            "vendor": device.get('kismet.device.base.vendor', ''),
+                            "last_seen": datetime.now().strftime("%H:%M:%S"),
+                            "timestamp": datetime.now()
+                        })
+            
+            return events
+    except websocket.WebSocketConnectionClosedException:
+        print("❌ WebSocket connection closed")
+    except Exception as e:
+        print(f"❌ WebSocket error: {e}")
+    
+    return []
+
 def get_kismet_networks():
-    """Fetch networks from Kismet .kismet file (SQLite)"""
-    global cached_networks, cache_time
+    """Fetch networks from Kismet via WebSocket or .kismet file"""
+    global cached_networks, cache_time, STOP_WEBSOCKET
     
     print("🔍 Fetching networks from Kismet...")
     
-    # Check cache (refresh every 2 seconds)
+    # Check if WebSocket is stopped
+    if STOP_WEBSOCKET:
+        print("⏹️ WebSocket is stopped, returning empty")
+        return []
+    
+    # Check cache
     if cache_time and cached_networks:
         age = (datetime.now() - cache_time).total_seconds()
         if age < 2:
             print(f"ℹ️ Using cached data ({len(cached_networks)} networks, {age:.1f}s old)")
             return cached_networks
     
-    # Find the latest .kismet file
+    # Check if Kismet is running
+    if not is_kismet_running():
+        print("❌ Kismet is not running")
+        return []
+    
+    # Try WebSocket first
+    events = get_networks_from_websocket()
+    if events:
+        print(f"✅ Found {len(events)} networks from WebSocket")
+        cached_networks = events
+        cache_time = datetime.now()
+        return events
+    
+    # Fallback to .kismet file
+    events = get_networks_from_file()
+    if events:
+        print(f"✅ Found {len(events)} networks from .kismet file")
+        cached_networks = events
+        cache_time = datetime.now()
+        return events
+    
+    print("ℹ️ No networks found")
+    return []
+
+def get_networks_from_file():
+    """Read networks from .kismet file"""
     kismet_files = glob.glob(os.path.expanduser("~/Kismet-*.kismet"))
     if not kismet_files:
         print("❌ No .kismet files found")
-        return get_mock_networks()
+        return []
     
-    # Get the most recent file
     latest = max(kismet_files, key=os.path.getmtime)
     print(f"📁 Reading from: {latest}")
-    
-    events = []
     
     try:
         conn = sqlite3.connect(latest)
         cursor = conn.cursor()
         
-        # Query for access points - get the JSON data from device column
+        # Check if devices table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='devices'")
+        if not cursor.fetchone():
+            print("❌ Devices table does not exist")
+            conn.close()
+            return []
+        
+        cursor.execute("SELECT COUNT(*) FROM devices")
+        total_count = cursor.fetchone()[0]
+        print(f"📊 Total devices: {total_count}")
+        
+        if total_count == 0:
+            print("⏳ No devices yet")
+            conn.close()
+            return []
+        
         cursor.execute("""
-            SELECT 
-                devmac, 
-                device, 
-                strongest_signal, 
-                type, 
-                last_time
+            SELECT devmac, device, strongest_signal, last_time
             FROM devices 
             WHERE type = 'Wi-Fi AP' OR type = 'Wi-Fi Bridged'
             ORDER BY strongest_signal DESC 
@@ -119,30 +251,21 @@ def get_kismet_networks():
         rows = cursor.fetchall()
         conn.close()
         
-        print(f"📊 Found {len(rows)} access points")
-        
+        events = []
         for row in rows:
-            # Decode MAC address
             devmac = decode_bytes(row[0])
-            
-            # Skip invalid MACs
-            if not devmac or devmac == "" or devmac == "00:00:00:00:00:00":
+            if not devmac or devmac == "00:00:00:00:00:00":
                 continue
             
-            # Extract device info from the JSON in the device column
             device_json = row[1] if row[1] is not None else "{}"
             signal = row[2] if row[2] is not None else -60
-            device_type = decode_bytes(row[3])
-            last_time_val = row[4] if row[4] is not None else time.time()
+            last_time_val = row[3] if row[3] is not None else time.time()
             
-            # Parse the JSON data
             name, vendor, channel, encryption, json_signal = extract_device_info(device_json)
             
-            # Use signal from JSON if available, otherwise use the column value
             if json_signal and json_signal != -60:
                 signal = json_signal
             
-            # Parse last_time
             try:
                 if isinstance(last_time_val, (int, float)):
                     last_seen_dt = datetime.fromtimestamp(last_time_val)
@@ -151,7 +274,6 @@ def get_kismet_networks():
             except:
                 last_seen_dt = datetime.now()
             
-            # Clean up the name
             if not name or name == "":
                 name = "Hidden Network"
             
@@ -167,30 +289,10 @@ def get_kismet_networks():
                 "timestamp": last_seen_dt
             })
         
+        return events
     except Exception as e:
         print(f"❌ Error reading .kismet file: {e}")
-        import traceback
-        traceback.print_exc()
-        return get_mock_networks()
-    
-    if events:
-        print(f"✅ Found {len(events)} networks from .kismet file")
-        cached_networks = events
-        cache_time = datetime.now()
-        return events
-    
-    print("⚠️ No networks found, using mock data")
-    return get_mock_networks()
-
-def get_mock_networks():
-    """Return mock networks for testing"""
-    now = datetime.now().strftime("%H:%M:%S")
-    return [
-        {"bssid": "06:5F:67:C3:7A:97", "essid": "master-bedroom_Guest", "channel": 6, "signal": -45, "security": "WPA2-PSK", "clients": 0, "vendor": "", "last_seen": now, "timestamp": datetime.now()},
-        {"bssid": "30:16:9D:62:6A:10", "essid": "Janlinksys", "channel": 1, "signal": -58, "security": "WPA2-PSK", "clients": 0, "vendor": "Linksys", "last_seen": now, "timestamp": datetime.now()},
-        {"bssid": "00:5F:67:C3:7A:97", "essid": "master-bedroom", "channel": 6, "signal": -45, "security": "WPA2-PSK", "clients": 0, "vendor": "", "last_seen": now, "timestamp": datetime.now()},
-        {"bssid": "0E:84:08:40:1C:18", "essid": "Converge_5GHz_U6fu", "channel": 36, "signal": -62, "security": "WPA2-PSK", "clients": 0, "vendor": "Converge", "last_seen": now, "timestamp": datetime.now()},
-    ]
+        return []
 
 def is_kismet_running():
     """Check if Kismet is running"""
@@ -199,6 +301,13 @@ def is_kismet_running():
         return result.returncode == 0 and result.stdout.strip() != ""
     except:
         return False
+
+def invalidate_cache():
+    """Invalidate the cache"""
+    global cached_networks, cache_time
+    cached_networks = []
+    cache_time = None
+    print("🔄 Cache invalidated")
 
 @router.get("/events", response_model=LiveEventsResponse)
 def get_live_events(
@@ -279,6 +388,7 @@ def clear_all_data(db: Session = Depends(get_db)):
     """Clear all Temp DB data"""
     db.query(LiveEvent).delete()
     db.commit()
+    invalidate_cache()
     return {"message": "All Temp DB data cleared"}
 
 @router.post("/clear-old")
@@ -287,6 +397,7 @@ def clear_old_data(hours: int = 24, db: Session = Depends(get_db)):
     cutoff_time = datetime.utcnow() - timedelta(hours=hours)
     deleted_count = db.query(LiveEvent).filter(LiveEvent.created_at < cutoff_time).delete()
     db.commit()
+    invalidate_cache()
     return {"message": f"Deleted {deleted_count} records older than {hours} hours"}
 
 @router.get("/export")

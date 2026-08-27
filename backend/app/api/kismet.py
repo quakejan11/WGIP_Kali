@@ -20,22 +20,6 @@ router = APIRouter(prefix="/api/kismet", tags=["kismet"])
 # ✅ FIX: Use the same path as interfaces.py
 SELECTED_INTERFACE_FILE = Path(__file__).parent.parent.parent / "selected_interface.txt"
 
-# Default channels to scan (all 2.4GHz channels)
-DEFAULT_CHANNELS = "1,2,3,4,5,6,7,8,9,10,11"
-
-# Channel presets
-CHANNEL_PRESETS = {
-    "2.4ghz_all": "1,2,3,4,5,6,7,8,9,10,11",
-    "2.4ghz_common": "1,6,11",
-    "5ghz_all": "36,40,44,48,149,153,157,161",
-    "5ghz_common": "36,40,44,48",
-    "all": "1,2,3,4,5,6,7,8,9,10,11,36,40,44,48,149,153,157,161"
-}
-
-class KismetStartRequest(BaseModel):
-    channels: Optional[str] = None
-    preset: Optional[str] = None
-
 def run_command(command):
     """Run a shell command and return the output."""
     try:
@@ -46,14 +30,29 @@ def run_command(command):
 
 def is_kismet_running():
     """Check if Kismet is currently running."""
+    # Method 1: pgrep
     stdout, stderr, rc = run_command("pgrep kismet")
-    return rc == 0 and stdout != ""
+    if rc == 0 and stdout != "":
+        return True
+    
+    # Method 2: ps aux as fallback
+    stdout, stderr, rc = run_command("ps aux | grep kismet | grep -v grep | grep -v python | grep -v uvicorn")
+    if rc == 0 and stdout.strip() != "":
+        return True
+    
+    return False
 
 def get_kismet_pid():
     """Get the PID of the Kismet process."""
     stdout, stderr, rc = run_command("pgrep kismet")
     if rc == 0 and stdout != "":
         return stdout.split('\n')[0]
+    
+    # Fallback: get from ps aux
+    stdout, stderr, rc = run_command("ps aux | grep kismet | grep -v grep | grep -v python | grep -v uvicorn | awk '{print $2}'")
+    if rc == 0 and stdout.strip() != "":
+        return stdout.split('\n')[0]
+    
     return None
 
 def get_selected_interface():
@@ -73,10 +72,20 @@ def invalidate_live_cache():
     except Exception as e:
         print(f"⚠️ Could not invalidate cache: {e}")
 
+def reset_websocket_flag():
+    """Reset the WebSocket stop flag"""
+    try:
+        from app.api.live import reset_websocket_flag as reset_flag
+        reset_flag()
+        print("🔄 WebSocket flag reset")
+    except Exception as e:
+        print(f"⚠️ Could not reset WebSocket flag: {e}")
+
 @router.post("/start")
-def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStartRequest] = None):
+def start_kismet(background_tasks: BackgroundTasks):
     """
-    Start Kismet on selected interface with channel options.
+    Start Kismet on selected interface with REST API enabled.
+    Uses the exact command: sudo kismet -c {interface} --no-daemonize --httpd-rest-api=true --httpd-port=2501 --httpd-allow-cors=true
     """
     print("=" * 60)
     print("🚀 START KISMET CALLED")
@@ -88,29 +97,21 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
     if not interface:
         raise HTTPException(status_code=400, detail="No interface selected. Please select an interface first.")
     
-    # Determine channels to use
-    channel_list = DEFAULT_CHANNELS
-    
-    if request:
-        if request.channels:
-            channel_list = request.channels
-            print(f"📡 Channels from request: {channel_list}")
-        elif request.preset and request.preset in CHANNEL_PRESETS:
-            channel_list = CHANNEL_PRESETS[request.preset]
-            print(f"📡 Preset: {request.preset} -> {channel_list}")
+    # Reset WebSocket flag
+    reset_websocket_flag()
     
     # Check if Kismet is already running
     if is_kismet_running():
         print("⚠️ Kismet already running, stopping it first...")
-        subprocess.run("pkill kismet", shell=True)
+        subprocess.run("sudo pkill -9 kismet", shell=True)
         import time
         time.sleep(2)
     
     # Invalidate cache
     invalidate_live_cache()
     
-    # Build the command with channels
-    cmd = f"sudo kismet -c {interface} --no-daemonize --channels={channel_list}"
+    # ✅ Use the exact command you want
+    cmd = f"sudo kismet -c {interface} --no-daemonize --httpd-rest-api=true --httpd-port=2501 --httpd-allow-cors=true"
     print(f"🔍 Command: {cmd}")
     
     try:
@@ -118,11 +119,12 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
         process = subprocess.Popen(
             cmd.split(),
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL
         )
         
         import time
-        time.sleep(5)  # Wait longer for Kismet to start
+        time.sleep(5)
         
         # Check if process is still running
         if process.poll() is None:
@@ -138,7 +140,6 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
                 print(f"📁 Modified: {datetime.fromtimestamp(os.path.getmtime(latest))}")
             else:
                 print("❌ No .kismet files found!")
-                # Check if Kismet is writing to a different location
                 sudo_files = glob.glob("/root/Kismet-*.kismet")
                 if sudo_files:
                     print(f"📁 Found files in /root/: {sudo_files}")
@@ -148,7 +149,6 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
                 "success": True,
                 "message": f"Kismet started on interface {interface}",
                 "interface": interface,
-                "channels": channel_list,
                 "pid": process.pid
             }
         else:
@@ -160,9 +160,8 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
         print("❌ Kismet not installed")
         return {
             "success": True,
-            "message": f"Kismet would start on interface {interface} with channels {channel_list} (simulated - Kismet not installed)",
+            "message": f"Kismet would start on interface {interface} (simulated - Kismet not installed)",
             "interface": interface,
-            "channels": channel_list,
             "simulated": True
         }
     except Exception as e:
@@ -171,34 +170,58 @@ def start_kismet(background_tasks: BackgroundTasks, request: Optional[KismetStar
 
 @router.post("/stop")
 def stop_kismet():
-    """Stop Kismet"""
+    """Stop Kismet - Multiple methods to ensure it stops"""
+    print("=" * 60)
     print("⏹️ STOP KISMET CALLED")
-    pcap_monitor.stop_monitoring()
-    invalidate_live_cache()
+    print("=" * 60)
     
-    if is_kismet_running():
-        stdout, stderr, rc = run_command("pkill kismet")
-        if rc == 0:
-            import time
-            time.sleep(2)
-            if not is_kismet_running():
-                print("✅ Kismet stopped successfully")
-                return {"message": "Kismet stopped successfully"}
-            else:
-                run_command("pkill -9 kismet")
-                time.sleep(1)
-                if not is_kismet_running():
-                    print("✅ Kismet stopped successfully (force killed)")
-                    return {"message": "Kismet stopped successfully (force killed)"}
-                else:
-                    print("❌ Failed to stop Kismet")
-                    raise HTTPException(status_code=500, detail="Failed to stop Kismet")
-        else:
-            print("❌ Failed to stop Kismet")
-            raise HTTPException(status_code=500, detail="Failed to stop Kismet")
-    else:
+    # 1. Stop WebSocket connections FIRST
+    try:
+        from app.api.live import stop_websocket_connections
+        stop_websocket_connections()
+        print("✅ WebSocket stop flag set")
+    except Exception as e:
+        print(f"⚠️ Error stopping WebSocket: {e}")
+    
+    # 2. Stop PCAP monitoring
+    try:
+        pcap_monitor.stop_monitoring()
+        print("✅ PCAP Monitor stopped")
+    except Exception as e:
+        print(f"⚠️ Error stopping PCAP monitor: {e}")
+    
+    # 3. Invalidate cache
+    invalidate_live_cache()
+    print("✅ Live cache invalidated")
+    
+    # 4. Check if Kismet is running
+    if not is_kismet_running():
         print("ℹ️ Kismet is not running")
-        return {"message": "Kismet is not running"}
+        return {"message": "Kismet is not running", "status": "stopped"}
+    
+    import time
+    
+    # 5. Kill Kismet process
+    print("🔍 Attempting to stop Kismet...")
+    commands = [
+        "sudo pkill -9 kismet",
+        "sudo killall -9 kismet",
+        "sudo pkill -9 kismet_cap_linux_wifi"
+    ]
+    
+    for cmd in commands:
+        print(f"🔍 Running: {cmd}")
+        run_command(cmd)
+        time.sleep(1)
+        if not is_kismet_running():
+            print("✅ Kismet stopped")
+            # Reset WebSocket flag for next start
+            reset_websocket_flag()
+            return {"message": "Kismet stopped successfully", "status": "stopped"}
+    
+    # If all methods fail
+    print("❌ Failed to stop Kismet")
+    raise HTTPException(status_code=500, detail="Failed to stop Kismet")
 
 @router.get("/status")
 def get_kismet_status():
@@ -235,14 +258,6 @@ def get_kismet_status_detailed():
         "fallback_active": fallback_active,
         "interface": interface,
         "message": f"Kismet: {'Running' if kismet_running else 'Stopped'}, PCAP: {'Healthy' if pcap_healthy else 'Unhealthy'}, Mode: {'Fallback' if fallback_active else 'Live'}"
-    }
-
-@router.get("/channels")
-def get_channel_presets():
-    """Get available channel presets"""
-    return {
-        "presets": CHANNEL_PRESETS,
-        "default": DEFAULT_CHANNELS
     }
 
 @router.get("/debug/files")

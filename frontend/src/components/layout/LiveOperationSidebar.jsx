@@ -1,346 +1,358 @@
 import React, { useState, useEffect } from "react";
 import {
   Box,
-  Button,
   Typography,
-  TextField,
-  MenuItem,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  CircularProgress,
+  Chip,
   Stack,
+  Button,
   Tooltip,
   IconButton,
 } from "@mui/material";
-import { PlayCircleFilled, Stop, Refresh } from "@mui/icons-material";
+import { 
+  SignalWifiOff,
+  SignalWifi4Bar,
+  SignalWifi1Bar,
+  Search,
+} from "@mui/icons-material";
+
+const tableHeaders = [
+  "BSSID",
+  "SSID",
+  "Manufacturer",
+  "Encryption",
+  "Channel",
+  "Clients",
+  "Last seen",
+  "Signal",
+  "Location",
+  "Actions",
+];
 
 const LiveOperationSidebar = () => {
-  const [interfaces, setInterfaces] = useState([]);
-  const [interfacesLoading, setInterfacesLoading] = useState(true);
-  const [selectedInterface, setSelectedInterface] = useState("");
+  const [devices, setDevices] = useState([]);
+  const [loadingDevices, setLoadingDevices] = useState(false);
   const [kismetStatus, setKismetStatus] = useState("stopped");
-  const [tempDbStatus, setTempDbStatus] = useState("inactive");
-  const [packetCount, setPacketCount] = useState(0);
   const [recordsCount, setRecordsCount] = useState(0);
-  const [oldestRecord, setOldestRecord] = useState("");
   const [newestRecord, setNewestRecord] = useState("");
+  const [sortBy, setSortBy] = useState("signal");
+  const [sortDir, setSortDir] = useState("desc");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   useEffect(() => {
-    fetchInterfaces();
+    fetchStatus();
     const statusInterval = setInterval(fetchStatus, 5000);
     return () => clearInterval(statusInterval);
   }, []);
 
-  const fetchInterfaces = async () => {
-    setInterfacesLoading(true);
-    try {
-      const response = await fetch("/api/interfaces");
-      if (!response.ok) throw new Error("Failed to fetch interfaces");
-      const data = await response.json();
-      // Fix: Backend returns {interfaces: ["wlan0"]}
-      const interfaceList = data.interfaces || [];
-      setInterfaces(interfaceList);
-      if (interfaceList.length > 0 && !selectedInterface) {
-        setSelectedInterface(interfaceList[0]);
-      }
-    } catch (err) {
-      console.error("Failed to fetch interfaces", err);
-    } finally {
-      setInterfacesLoading(false);
+  useEffect(() => {
+    if (kismetStatus === "running") {
+      fetchDevices();
+      const deviceInterval = setInterval(fetchDevices, 3000);
+      return () => clearInterval(deviceInterval);
     }
-  };
+  }, [kismetStatus]);
 
   const fetchStatus = async () => {
     try {
-      const [kismetRes, tempDbRes] = await Promise.all([
+      const [kismetRes, liveRes] = await Promise.all([
         fetch("/api/kismet/status"),
         fetch("/api/live/status"),
       ]);
-      
       const kismetData = await kismetRes.json();
-      const tempDbData = await tempDbRes.json();
-
-      // Fix: Backend returns {running: true/false}
-      const isKismetRunning = kismetData.running || false;
-      
-      setKismetStatus(isKismetRunning ? "running" : "stopped");
-      setTempDbStatus((tempDbData.total_count || 0) > 0 ? "active" : "inactive");
-      setPacketCount(kismetData.packet_count || 0);
-      setRecordsCount(tempDbData.total_count || 0);
-      setOldestRecord(tempDbData.oldest_record || "");
-      setNewestRecord(tempDbData.newest_record || "");
+      const liveData = await liveRes.json();
+      setKismetStatus(kismetData.running ? "running" : "stopped");
+      setRecordsCount(liveData.total_count || 0);
+      if (liveData.newest_record) {
+        const date = new Date(liveData.newest_record);
+        setNewestRecord(date.toLocaleString());
+      }
     } catch (err) {
       console.error("Failed to fetch status", err);
     }
   };
 
-  const handleStartKismet = async () => {
-    if (!selectedInterface) return;
+  const fetchDevices = async () => {
+    setLoadingDevices(true);
     try {
-      await fetch(`/api/interfaces/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interface: selectedInterface }),
-      });
-      await fetch("/api/kismet/start", { method: "POST" });
-      setTimeout(fetchStatus, 1000);
-    } catch (err) {
-      console.error("Failed to start Kismet", err);
-    }
-  };
-
-  const handleStopKismet = async () => {
-    try {
-      await fetch("/api/kismet/stop", { method: "POST" });
-      setTimeout(fetchStatus, 1000);
-    } catch (err) {
-      console.error("Failed to stop Kismet", err);
-    }
-  };
-
-  const handleClearAll = async () => {
-    try {
-      await fetch("/api/live/clear", { method: "POST" });
-      fetchStatus();
-    } catch (err) {
-      console.error("Failed to clear all records", err);
-    }
-  };
-
-  const handleClearOld = async () => {
-    try {
-      await fetch("/api/live/clear-old", { method: "POST" });
-      fetchStatus();
-    } catch (err) {
-      console.error("Failed to clear old records", err);
-    }
-  };
-
-  const handleExport = async () => {
-    try {
-      const response = await fetch("/api/live/export", { method: "POST" });
-      if (response.ok) {
-        console.log("Export completed successfully");
+      const response = await fetch("/api/live/events/recent?limit=100");
+      if (!response.ok) throw new Error("Failed to fetch devices");
+      const data = await response.json();
+      
+      let devicesData = [];
+      if (Array.isArray(data)) {
+        devicesData = data;
+      } else if (data.events) {
+        devicesData = data.events;
+      } else if (data.data) {
+        devicesData = data.data;
       }
+      
+      const transformedDevices = devicesData.map(device => ({
+        bssid: device.bssid || "00:00:00:00:00:00",
+        ssid: device.essid || device.ssid || "Unknown",
+        manufacturer: device.vendor || device.data?.vendor || "",
+        encryption: device.security || device.data?.security || "Unknown",
+        channel: device.channel || 1,
+        clients: device.clients || device.data?.clients || 0,
+        lastSeen: device.last_seen || new Date().toLocaleTimeString(),
+        signal: device.signal || -60,
+        location: "N/A",
+      }));
+      
+      const uniqueDevices = {};
+      transformedDevices.forEach(device => {
+        if (!uniqueDevices[device.bssid] || device.signal > uniqueDevices[device.bssid].signal) {
+          uniqueDevices[device.bssid] = device;
+        }
+      });
+      
+      const finalDevices = Object.values(uniqueDevices);
+      finalDevices.sort((a, b) => b.signal - a.signal);
+      
+      setDevices(finalDevices);
     } catch (err) {
-      console.error("Failed to export records", err);
+      console.error("Failed to fetch devices:", err);
+    } finally {
+      setLoadingDevices(false);
     }
   };
 
-  if (interfacesLoading) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Typography>Loading interfaces...</Typography>
-      </Box>
-    );
-  }
+  const handleSort = (column) => {
+    const sortMap = {
+      "BSSID": "bssid",
+      "SSID": "ssid",
+      "Manufacturer": "manufacturer",
+      "Encryption": "encryption",
+      "Channel": "channel",
+      "Clients": "clients",
+      "Last seen": "lastSeen",
+      "Signal": "signal",
+    };
+    const key = sortMap[column] || column.toLowerCase();
+    if (sortBy === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+  };
+
+  const getSignalIcon = (signal) => {
+    if (signal >= -50) return <SignalWifi4Bar fontSize="small" color="success" />;
+    if (signal >= -60) return <SignalWifi4Bar fontSize="small" color="warning" />;
+    if (signal >= -70) return <SignalWifi1Bar fontSize="small" color="warning" />;
+    return <SignalWifiOff fontSize="small" color="error" />;
+  };
+
+  const getSignalColor = (signal) => {
+    if (signal >= -50) return "#22c55e";
+    if (signal >= -60) return "#eab308";
+    if (signal >= -70) return "#eab308";
+    return "#ef4444";
+  };
+
+  const sortedDevices = [...devices].sort((a, b) => {
+    let valA = a[sortBy] || "";
+    let valB = b[sortBy] || "";
+    if (typeof valA === 'string') valA = valA.toLowerCase();
+    if (typeof valB === 'string') valB = valB.toLowerCase();
+    if (valA < valB) return sortDir === "asc" ? -1 : 1;
+    if (valA > valB) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  const totalPages = Math.ceil(sortedDevices.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedDevices = sortedDevices.slice(startIndex, startIndex + itemsPerPage);
 
   return (
-    <Box sx={{ p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* Adapter Selection */}
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          WiFi Adapter
-        </Typography>
-        <TextField
-          select
-          label="Interface"
-          value={selectedInterface}
-          onChange={(e) => setSelectedInterface(e.target.value)}
-          fullWidth
-          size="small"
-          slotProps={{
-            select: {
-              MenuProps: {
-                MenuListProps: { "data-disable-rfx": true }
-              }
-            }
-          }}
-        >
-          {interfaces.map((iface) => (
-            <MenuItem key={iface} value={iface}>
-              {iface}
-            </MenuItem>
-          ))}
-        </TextField>
-      </Box>
+    <Box sx={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", bgcolor: "#f5f7fa", p: 2 }}>
+      <Paper sx={{ flex: 1, display: "flex", flexDirection: "column", borderRadius: 2, border: "1px solid #e0e7ef", overflow: "hidden", minHeight: 0 }}>
+        <TableContainer sx={{ flex: 1 }}>
+          <Table stickyHeader size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: "#f8fafb" }}>
+                {tableHeaders.map((column) => {
+                  const sortMap = {
+                    "BSSID": "bssid",
+                    "SSID": "ssid",
+                    "Manufacturer": "manufacturer",
+                    "Encryption": "encryption",
+                    "Channel": "channel",
+                    "Clients": "clients",
+                    "Last seen": "lastSeen",
+                    "Signal": "signal",
+                  };
+                  const isSorted = sortBy === sortMap[column];
+                  const arrow = isSorted ? (sortDir === "asc" ? "▲" : "▼") : "";
+                  return (
+                    <TableCell
+                      key={column}
+                      onClick={() => handleSort(column)}
+                      sx={{
+                        fontWeight: isSorted ? 700 : 600,
+                        color: isSorted ? "#065f46" : "#64748b",
+                        fontSize: "0.75rem",
+                        cursor: "pointer",
+                        userSelect: "none",
+                        whiteSpace: "nowrap",
+                        py: 1.5,
+                        px: 1,
+                        bgcolor: "#f8fafb",
+                      }}
+                    >
+                      {column} {arrow}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {loadingDevices && devices.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                    <CircularProgress size={40} />
+                    <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
+                      Scanning for networks...
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : paginatedDevices.length > 0 ? (
+                paginatedDevices.map((device, index) => (
+                  <TableRow key={`${device.bssid}_${index}`} hover>
+                    <TableCell sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>{device.bssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem", fontWeight: 500 }}>{device.ssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.manufacturer || "Unknown"}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={device.encryption}
+                        size="small"
+                        color={device.encryption === "Open" ? "success" : "warning"}
+                        variant="outlined"
+                        sx={{ fontSize: "0.6rem", height: 20 }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.channel}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.clients}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.lastSeen}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                        {getSignalIcon(device.signal)}
+                        <Typography sx={{ fontWeight: 500, color: getSignalColor(device.signal), fontSize: "0.7rem" }}>
+                          {device.signal}dBm
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.location || "N/A"}</TableCell>
+                    <TableCell>
+                      <Tooltip title="View Details">
+                        <IconButton size="small" sx={{ p: 0.5 }}>
+                          <Search fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <SignalWifiOff sx={{ fontSize: 48, color: "#ccc" }} />
+                      <Typography variant="body1" color="textSecondary">
+                        {kismetStatus === "running" ? "No devices detected yet..." : "Start scanning to see devices"}
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
 
-      {/* Status Indicators */}
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Status
-        </Typography>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Tooltip title="Kismet Status">
-              <Box
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  bgcolor:
-                    kismetStatus === "running"
-                      ? "#22c55e"
-                      : kismetStatus === "starting"
-                      ? "#f59e0b"
-                      : "#ef4444",
-                }}
-              />
-            </Tooltip>
-            <Typography variant="body2">
-              Kismet:{" "}
-              {kismetStatus === "running"
-                ? "Running"
-                : kismetStatus === "starting"
-                ? "Starting..."
-                : "Stopped"}
-            </Typography>
-          </Box>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Tooltip title="Temp DB Status">
-              <Box
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  bgcolor: tempDbStatus === "active" ? "#22c55e" : "#ef4444",
-                }}
-              />
-            </Tooltip>
-            <Typography variant="body2">
-              Temp DB: {tempDbStatus === "active" ? "Active" : "Inactive"}
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
+        <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", bgcolor: "#fff", borderTop: "1px solid #e0e7ef", flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
+          <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
+            Records: {recordsCount}
+          </Typography>
+          
+          <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
+            Newest: {newestRecord || "N/A"}
+          </Typography>
 
-      {/* Adapter Details */}
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Adapter Details
-        </Typography>
-        <Box
-          sx={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 2,
-            p: 1.5,
-            display: "flex",
-            flexDirection: "column",
-            gap: 0.5,
-          }}
-        >
-          <Typography variant="caption" display="block">
-            MAC: AA:BB:CC:DD:EE:FF
-          </Typography>
-          <Typography variant="caption" display="block">
-            Channel: 6
-          </Typography>
-          <Typography variant="caption" display="block">
-            Mode: Monitor
-          </Typography>
-          <Typography variant="caption" display="block">
-            Status: {kismetStatus === "running" ? "Online" : "Offline"}
-          </Typography>
-        </Box>
-      </Box>
-
-      {/* Packet and Record Counts */}
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Statistics
-        </Typography>
-        <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-          <Typography variant="body2">Packets: {packetCount}</Typography>
-          <Typography variant="body2">Records: {recordsCount}</Typography>
-        </Box>
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: "0.8rem",
-            color: "#6b7280",
-          }}
-        >
-          <Typography variant="caption">Oldest: {oldestRecord || "N/A"}</Typography>
-          <Typography variant="caption">Newest: {newestRecord || "N/A"}</Typography>
-        </Box>
-      </Box>
-
-      {/* Controls */}
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Controls
-        </Typography>
-        <Stack direction="row" spacing={1}>
-          <Tooltip title="Start Kismet">
-            <span>
-              <Button
-                variant="contained"
-                color="success"
-                disabled={kismetStatus === "running" || !selectedInterface}
-                onClick={handleStartKismet}
-                startIcon={<PlayCircleFilled fontSize="inherit" />}
-                size="small"
-              >
-                Start
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Stop Kismet">
-            <span>
-              <Button
-                variant="contained"
-                color="error"
-                disabled={kismetStatus !== "running"}
-                onClick={handleStopKismet}
-                startIcon={<Stop fontSize="inherit" />}
-                size="small"
-              >
-                Stop
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="Refresh Status">
-            <IconButton onClick={fetchStatus} size="small">
-              <Refresh fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-
-        {/* Temp DB Controls */}
-        <Box sx={{ borderTop: "1px solid #e5e7eb", pt: 1.5, mt: 0.5 }}>
-          <Typography variant="body2" sx={{ mb: 1 }}>
-            Temp DB Controls
-          </Typography>
-          <Stack 
-            direction="row" 
-            spacing={1} 
-            sx={{ flexWrap: "wrap", gap: 1 }}
-          >
+          <Stack direction="row" spacing={0.5} alignItems="center">
             <Button
-              variant="outlined"
-              color="error"
-              onClick={handleClearAll}
               size="small"
+              variant="outlined"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
             >
-              Clear All
+              First
             </Button>
             <Button
-              variant="outlined"
-              color="warning"
-              onClick={handleClearOld}
               size="small"
+              variant="outlined"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
             >
-              Clear Old
+              Prev
+            </Button>
+            {[...Array(Math.min(totalPages, 5))].map((_, i) => {
+              const pageNum = i + 1;
+              const isActive = currentPage === pageNum;
+              return (
+                <Button
+                  key={pageNum}
+                  size="small"
+                  variant={isActive ? "contained" : "outlined"}
+                  onClick={() => setCurrentPage(pageNum)}
+                  sx={{
+                    minWidth: 32,
+                    px: 0.8,
+                    fontSize: "0.7rem",
+                    borderRadius: 1,
+                    bgcolor: isActive ? "#d1fae5" : "#fff",
+                    borderColor: "#e0e7ef",
+                    color: isActive ? "#065f46" : "#374151",
+                    fontWeight: isActive ? 700 : 500,
+                    boxShadow: "none",
+                    textTransform: "none",
+                  }}
+                >
+                  {pageNum}
+                </Button>
+              );
+            })}
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
+            >
+              Next
             </Button>
             <Button
-              variant="outlined"
-              color="primary"
-              onClick={handleExport}
               size="small"
+              variant="outlined"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
             >
-              Export
+              Last
             </Button>
           </Stack>
         </Box>
-      </Box>
+      </Paper>
     </Box>
   );
 };

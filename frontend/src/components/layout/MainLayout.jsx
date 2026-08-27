@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿﻿import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import {
@@ -48,11 +48,15 @@ const menuItems = [
   { label: "Map", path: "/map", icon: <MapIcon /> },
   { label: "Review Items", path: "/signals", icon: <ManageSearchIcon /> },
   { label: "Observations", path: "/observations", icon: <StorageIcon /> },
-  { label: "Monitoring", icon: <SecurityIcon />, children: [
+  {
+    label: "Monitoring",
+    icon: <SecurityIcon />,
+    children: [
       { label: "Live Scanning", path: "/live-operation/scan", icon: <SignalCellularAltIcon /> },
       { label: "DeAuth Monitor", path: "/live-operation/deauth", icon: <WifiOffIcon /> },
       { label: "Signal Map", path: "/live-operation/map", icon: <GpsFixedIcon /> },
-  ]},
+    ],
+  },
   { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
 ];
 

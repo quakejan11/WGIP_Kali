@@ -54,3 +54,4 @@ Thumbs.db
 # =========================
 backend_files.txt
 backend/wgip_scan_result_*.pdf
+*.kismet

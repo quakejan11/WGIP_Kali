@@ -18,13 +18,13 @@ sudo systemctl start postgresql
 sudo systemctl enable postgresql
 
 # Verify installations
-git --version
+
 python3 --version
 node --version
 npm --version
 sudo systemctl status postgresql
 
-
+git --version
 ===============================================================================
 PART 2: SET UP POSTGRESQL DATABASE
 ===============================================================================

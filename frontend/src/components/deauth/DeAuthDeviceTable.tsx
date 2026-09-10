@@ -9,46 +9,31 @@ import {
   TableHead,
   TableRow,
   Typography,
-  IconButton,
-  Chip,
   CircularProgress,
-  Tooltip,
 } from '@mui/material';
-import { PlayArrow, Flag, CheckCircle, Error, Warning, Info } from '@mui/icons-material';
-import { DeauthDevice } from '../../services/deauthService';
+
+// Define the Device interface locally since it's not imported
+export interface DeauthDevice {
+  id: string | number;
+  client_mac: string;
+  ssid?: string;
+  gps?: string;
+  status?: string;
+  notes?: string;
+  deauth_count?: number;
+  last_deauth_attempt?: string;
+}
 
 interface DeAuthDeviceTableProps {
   devices: DeauthDevice[];
   loading?: boolean;
-  onExecuteDeauth: (client_mac: string) => void;
-  onFlagDevice: (device: DeauthDevice) => void;
+  onExecuteDeauth?: (client_mac: string) => void;
+  onFlagDevice?: (device: DeauthDevice) => void;
 }
-
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'active': return 'success';
-    case 'flagged': return 'warning';
-    case 'pending': return 'info';
-    case 'deauthenticated': return 'default';
-    case 'blocked': return 'error';
-    default: return 'default';
-  }
-};
-
-const getStatusIcon = (status: string) => {
-  switch (status) {
-    case 'active': return <CheckCircle fontSize="small" />;
-    case 'flagged': return <Flag fontSize="small" />;
-    case 'pending': return <Info fontSize="small" />;
-    case 'deauthenticated': return <CheckCircle fontSize="small" />;
-    case 'blocked': return <Error fontSize="small" />;
-    default: return undefined;
-  }
-};
 
 const DeAuthDeviceTable: React.FC<DeAuthDeviceTableProps> = ({
   devices,
-  loading,
+  loading = false,
   onExecuteDeauth,
   onFlagDevice,
 }) => {
@@ -60,7 +45,7 @@ const DeAuthDeviceTable: React.FC<DeAuthDeviceTableProps> = ({
     );
   }
 
-  if (devices.length === 0) {
+  if (!devices || devices.length === 0) {
     return (
       <Paper sx={{ p: 3, textAlign: 'center' }}>
         <Typography color="textSecondary">No devices found</Typography>
@@ -69,68 +54,55 @@ const DeAuthDeviceTable: React.FC<DeAuthDeviceTableProps> = ({
   }
 
   return (
-    <Paper sx={{ p: 2, mb: 3 }}>
-      <Typography variant="h6" gutterBottom>
-        Flagged Devices
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
+        Handshake Captured
       </Typography>
       <TableContainer>
         <Table size="medium">
           <TableHead>
             <TableRow>
-              <TableCell>MAC Address</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Notes</TableCell>
-              <TableCell align="center">Deauth Count</TableCell>
-              <TableCell>Last Attempt</TableCell>
-              <TableCell align="center">Actions</TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                MAC Address
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                SSID
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                GPS
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {devices.map((device) => (
-              <TableRow key={device.id} hover>
-                <TableCell>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '13px' }}>
-                    {device.client_mac}
+              <TableRow 
+                key={device.id || device.client_mac} 
+                hover 
+                sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
+              >
+                <TableCell sx={{ py: 2.5, px: 2 }}>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                  >
+                    {device.client_mac || 'N/A'}
                   </Typography>
                 </TableCell>
-                <TableCell>
-                  <Chip
-                    label={device.status}
-                    color={getStatusColor(device.status)}
-                    size="small"
-                    icon={getStatusIcon(device.status)}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                    {device.notes || '-'}
+                <TableCell sx={{ py: 2.5, px: 2 }}>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ fontWeight: 500, fontSize: '0.9rem' }}
+                  >
+                    {device.ssid || 'Unknown'}
                   </Typography>
                 </TableCell>
-                <TableCell align="center">{device.deauth_count}</TableCell>
-                <TableCell>
-                  {device.last_deauth_attempt 
-                    ? new Date(device.last_deauth_attempt).toLocaleString()
-                    : '-'}
-                </TableCell>
-                <TableCell align="center">
-                  <Tooltip title="Execute Deauth">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => onExecuteDeauth(device.client_mac)}
-                    >
-                      <PlayArrow fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Flag Device">
-                    <IconButton
-                      size="small"
-                      color="warning"
-                      onClick={() => onFlagDevice(device)}
-                    >
-                      <Flag fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
+                <TableCell sx={{ py: 2.5, px: 2 }}>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ fontSize: '0.85rem', color: 'text.secondary' }}
+                  >
+                    {device.gps || 'N/A'}
+                  </Typography>
                 </TableCell>
               </TableRow>
             ))}

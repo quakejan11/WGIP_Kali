@@ -103,7 +103,7 @@ const DeAuthMonitor = () => {
         </Alert>
       )}
 
-      <DeAuthStats stats={stats} loading={loading} />
+      {/* REMOVED: DeAuthStats component */}
 
       <DeAuthAPTable
         aps={aps}
@@ -121,7 +121,7 @@ const DeAuthMonitor = () => {
         }}
       />
 
-      <DeAuthLogs logs={logs} loading={loading} />
+      {/* REMOVED: DeAuthLogs component */}
 
       <FlagDeviceDialog
         open={dialogOpen}

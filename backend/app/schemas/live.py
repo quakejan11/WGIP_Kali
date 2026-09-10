@@ -31,4 +31,4 @@ class LiveStatsResponse(BaseModel):
     total_count: int
     oldest_record: Optional[datetime] = None
     newest_record: Optional[datetime] = None
-    expires_in_hours: int = 24
+    expires_in_hours: int = 24                                                  

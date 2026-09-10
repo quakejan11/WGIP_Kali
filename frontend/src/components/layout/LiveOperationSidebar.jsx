@@ -14,6 +14,7 @@ import {
   Stack,
   Button,
   Tooltip,
+  IconButton,
 } from "@mui/material";
 import {
   SignalWifiOff,
@@ -25,13 +26,8 @@ import {
 const tableHeaders = [
   "BSSID",
   "SSID",
-  "Manufacturer",
-  "Encryption",
+  "MAC Address",
   "Channel",
-  "Clients",
-  "Last seen",
-  "Signal",
-  "Location",
   "Actions",
 ];
 
@@ -44,7 +40,6 @@ const LiveOperationSidebar = () => {
   const [sortBy, setSortBy] = useState("signal");
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
-
   const itemsPerPage = 10;
 
   useEffect(() => {
@@ -146,12 +141,12 @@ const LiveOperationSidebar = () => {
 
   const handleSort = (column) => {
     const sortMap = {
-      BSSID: "bssid",
-      SSID: "ssid",
-      Manufacturer: "manufacturer",
-      Encryption: "encryption",
-      Channel: "channel",
-      Clients: "clients",
+      "BSSID": "bssid",
+      "SSID": "ssid",
+      "Manufacturer": "manufacturer",
+      "Encryption": "encryption",
+      "Channel": "channel",
+      "Clients": "clients",
       "Last seen": "lastSeen",
       Signal: "signal",
     };
@@ -168,10 +163,6 @@ const LiveOperationSidebar = () => {
       setSortBy(key);
       setSortDir("asc");
     }
-  };
-
-  const handleDeauthClick = (device) => {
-    console.log("Deauth UI selected:", device);
   };
 
   const getSignalIcon = (signal) => {
@@ -258,12 +249,12 @@ const LiveOperationSidebar = () => {
               <TableRow sx={{ bgcolor: "#f8fafb" }}>
                 {tableHeaders.map((column) => {
                   const sortMap = {
-                    BSSID: "bssid",
-                    SSID: "ssid",
-                    Manufacturer: "manufacturer",
-                    Encryption: "encryption",
-                    Channel: "channel",
-                    Clients: "clients",
+                    "BSSID": "bssid",
+                    "SSID": "ssid",
+                    "Manufacturer": "manufacturer",
+                    "Encryption": "encryption",
+                    "Channel": "channel",
+                    "Clients": "clients",
                     "Last seen": "lastSeen",
                     Signal: "signal",
                   };
@@ -291,6 +282,7 @@ const LiveOperationSidebar = () => {
                         py: 1.5,
                         px: 1,
                         bgcolor: "#f8fafb",
+                        textAlign: column === "Actions" ? "center" : "left",
                       }}
                     >
                       {column} {arrow}
@@ -303,7 +295,7 @@ const LiveOperationSidebar = () => {
             <TableBody>
               {loadingDevices && devices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={5} align="center" sx={{ py: 6 }}>
                     <CircularProgress size={40} />
 
                     <Typography
@@ -318,145 +310,44 @@ const LiveOperationSidebar = () => {
               ) : paginatedDevices.length > 0 ? (
                 paginatedDevices.map((device, index) => (
                   <TableRow key={`${device.bssid}_${index}`} hover>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.75rem",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {device.bssid}
-                    </TableCell>
-
-                    <TableCell
-                      sx={{
-                        fontSize: "0.75rem",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {device.ssid}
-                    </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.manufacturer || "Unknown"}
-                    </TableCell>
-
+                    <TableCell sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>{device.bssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem", fontWeight: 500 }}>{device.ssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.manufacturer || "Unknown"}</TableCell>
                     <TableCell>
                       <Chip
                         label={device.encryption}
                         size="small"
-                        color={
-                          device.encryption === "Open" ? "success" : "warning"
-                        }
+                        color={device.encryption === "Open" ? "success" : "warning"}
                         variant="outlined"
-                        sx={{
-                          fontSize: "0.6rem",
-                          height: 20,
-                        }}
+                        sx={{ fontSize: "0.6rem", height: 20 }}
                       />
                     </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.channel}
-                    </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.clients}
-                    </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.lastSeen}
-                    </TableCell>
-
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.channel}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.clients}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.lastSeen}</TableCell>
                     <TableCell>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 0.5,
-                        }}
-                      >
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                         {getSignalIcon(device.signal)}
-
-                        <Typography
-                          sx={{
-                            fontWeight: 500,
-                            color: getSignalColor(device.signal),
-                            fontSize: "0.7rem",
-                          }}
-                        >
+                        <Typography sx={{ fontWeight: 500, color: getSignalColor(device.signal), fontSize: "0.7rem" }}>
                           {device.signal}dBm
                         </Typography>
                       </Box>
                     </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.location || "N/A"}
-                    </TableCell>
-
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.location || "N/A"}</TableCell>
                     <TableCell>
-                      <Stack
-                        direction="row"
-                        spacing={0.75}
-                        alignItems="center"
-                        sx={{ whiteSpace: "nowrap" }}
-                      >
-                        <Tooltip title="Deauth">
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="error"
-                            startIcon={
-                              <Block
-                                sx={{
-                                  fontSize: "15px !important",
-                                }}
-                              />
-                            }
-                            onClick={() => handleDeauthClick(device)}
-                            sx={{
-                              minWidth: 82,
-                              height: 28,
-                              px: 1.25,
-                              borderRadius: 1.25,
-                              bgcolor: "#dc2626",
-                              color: "#fff",
-                              fontSize: "0.68rem",
-                              fontWeight: 700,
-                              lineHeight: 1,
-                              textTransform: "none",
-                              boxShadow: "none",
-
-                              "&:hover": {
-                                bgcolor: "#b91c1c",
-                                boxShadow: "none",
-                              },
-                            }}
-                          >
-                            Deauth
-                          </Button>
-                        </Tooltip>
-                      </Stack>
+                      <Tooltip title="View Details">
+                        <IconButton size="small" sx={{ p: 0.5 }}>
+                          <Search fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
                   <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 1,
-                      }}
-                    >
-                      <SignalWifiOff
-                        sx={{
-                          fontSize: 48,
-                          color: "#ccc",
-                        }}
-                      />
-
+                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                      <SignalWifiOff sx={{ fontSize: 48, color: "#ccc" }} />
                       <Typography variant="body1" color="textSecondary">
                         {kismetStatus === "running"
                           ? "No devices detected yet..."
@@ -598,6 +489,59 @@ const LiveOperationSidebar = () => {
           </Stack>
         </Box>
       </Paper>
+
+      {/* Deauth Dialog */}
+      <Dialog open={deauthDialogOpen} onClose={handleDeauthClose}>
+        <DialogTitle>Deauth Attack</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Send deauthentication packets to disconnect all clients from:
+            <br />
+            <strong>BSSID:</strong> {selectedDevice?.bssid}
+            <br />
+            <strong>SSID:</strong> {selectedDevice?.ssid}
+            <br />
+            <strong>Channel:</strong> {selectedDevice?.channel}
+          </DialogContentText>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Number of packets (0 = unlimited)"
+            type="number"
+            fullWidth
+            variant="outlined"
+            value={deauthCount}
+            onChange={(e) => setDeauthCount(parseInt(e.target.value) || 0)}
+            helperText="0 will send packets continuously until stopped"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeauthClose} disabled={deauthLoading}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeauthConfirm}
+            color="error"
+            variant="contained"
+            disabled={deauthLoading}
+            startIcon={deauthLoading ? <CircularProgress size={20} /> : <Block />}
+          >
+            {deauthLoading ? "Starting..." : "Start Deauth"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleSnackbarClose}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert onClose={handleSnackbarClose} severity={snackbar.severity}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -182,34 +182,9 @@ const LiveOperationSidebar = () => {
     }
   };
 
-  const handleClearAll = async () => {
-    try {
-      await fetch("/api/live/clear", { method: "POST" });
-      setDevices([]);
-      fetchStatus();
-    } catch (err) {
-      console.error("Failed to clear all records", err);
-    }
-  };
-
-  const handleClearOld = async () => {
-    try {
-      await fetch("/api/live/clear-old", { method: "POST" });
-      fetchStatus();
-    } catch (err) {
-      console.error("Failed to clear old records", err);
-    }
-  };
-
-  const handleExport = async () => {
-    try {
-      const response = await fetch("/api/live/export", { method: "POST" });
-      if (response.ok) {
-        console.log("Export completed successfully");
-      }
-    } catch (err) {
-      console.error("Failed to export records", err);
-    }
+  const handleSelectTarget = (device) => {
+    console.log("Selected target:", device);
+    alert(`Selected target: ${device.ssid} (${device.bssid})`);
   };
 
   const handleSort = (column) => {
@@ -279,21 +254,9 @@ const LiveOperationSidebar = () => {
     <Box sx={{ width: "100%", height: "100%", bgcolor: "#f5f7fa", p: 2, display: "flex", flexDirection: "column" }}>
       {/* Controls Bar */}
       <Paper sx={{ p: 2, mb: 2, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", border: "1px solid #e0e7ef", boxShadow: "none" }}>
-        <TextField
-          select
-          size="small"
-          value={selectedInterface}
-          onChange={(e) => setSelectedInterface(e.target.value)}
-          label="Input WiFi Adapter"
-          sx={{ minWidth: 180, bgcolor: "#fff" }}
-          slotProps={{ select: { MenuProps: { MenuListProps: { "data-disable-rfx": true } } } }}
-        >
-          {interfaces.map((iface) => (
-            <MenuItem key={iface} value={iface}>
-              {iface}
-            </MenuItem>
-          ))}
-        </TextField>
+        <Typography variant="h6" sx={{ fontWeight: 600, color: "#065f46", mr: 1 }}>
+          Live Operation
+        </Typography>
 
         <Button
           variant="contained"
@@ -317,13 +280,6 @@ const LiveOperationSidebar = () => {
           Stop
         </Button>
 
-        <Chip
-          label={kismetStatus === "running" ? "🟢 Live" : "🔴 Stopped"}
-          color={kismetStatus === "running" ? "success" : "error"}
-          size="small"
-        />
-        <Chip label={`${devices.length} devices`} variant="outlined" size="small" />
-
         <Box sx={{ flex: 1 }} />
 
         <TextField
@@ -342,7 +298,7 @@ const LiveOperationSidebar = () => {
         </Button>
       </Paper>
 
-      {/* Table - Auto height based on rows */}
+      {/* Table */}
       <Paper sx={{ display: "flex", flexDirection: "column", border: "1px solid #e0e7ef", boxShadow: "none", overflow: "hidden" }}>
         <TableContainer sx={{ overflow: "auto" }}>
           <Table stickyHeader size="small">
@@ -361,20 +317,22 @@ const LiveOperationSidebar = () => {
                   };
                   const isSorted = sortBy === sortMap[column];
                   const arrow = isSorted ? (sortDir === "asc" ? "▲" : "▼") : "";
+                  const isSortable = column !== "Actions";
                   return (
                     <TableCell
                       key={column}
-                      onClick={() => handleSort(column)}
+                      onClick={() => isSortable && handleSort(column)}
                       sx={{
                         fontWeight: isSorted ? 700 : 600,
                         color: isSorted ? "#065f46" : "#64748b",
                         fontSize: "0.75rem",
-                        cursor: "pointer",
+                        cursor: isSortable ? "pointer" : "default",
                         userSelect: "none",
                         whiteSpace: "nowrap",
                         py: 1.5,
                         px: 1,
                         bgcolor: "#f8fafb",
+                        textAlign: column === "Actions" ? "center" : "left",
                       }}
                     >
                       {column} {arrow}
@@ -417,10 +375,28 @@ const LiveOperationSidebar = () => {
                       </Typography>
                     </TableCell>
                     <TableCell sx={{ fontSize: "0.75rem" }}>{device.location || "N/A"}</TableCell>
-                    <TableCell>
-                      <Button size="small" variant="outlined" sx={{ minWidth: 30, p: 0.5, fontSize: "0.6rem" }}>
-                        Q
-                      </Button>
+                    <TableCell align="center">
+                      <Tooltip title={`Select ${device.ssid} as target`}>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => handleSelectTarget(device)}
+                          sx={{
+                            textTransform: "none",
+                            fontSize: "0.65rem",
+                            minWidth: "auto",
+                            px: 1.5,
+                            py: 0.5,
+                            bgcolor: "#dc2626",
+                            color: "#fff",
+                            "&:hover": {
+                              bgcolor: "#b91c1c",
+                            },
+                          }}
+                        >
+                          Select Target
+                        </Button>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))
@@ -431,18 +407,6 @@ const LiveOperationSidebar = () => {
                       <Typography variant="body1" color="textSecondary">
                         {kismetStatus === "running" ? "No devices detected yet..." : "Start scanning to see devices"}
                       </Typography>
-                      {kismetStatus !== "running" && (
-                        <Button
-                          variant="contained"
-                          color="primary"
-                          size="small"
-                          onClick={handleStartKismet}
-                          disabled={!selectedInterface}
-                          sx={{ mt: 2 }}
-                        >
-                          Start Scanning
-                        </Button>
-                      )}
                     </Box>
                   </TableCell>
                 </TableRow>

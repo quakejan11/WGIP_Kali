@@ -22,17 +22,24 @@ class DeauthStatus(str, Enum):
 # ============ Request Schemas ============
 
 class DeauthRequest(BaseModel):
-    client_mac: str
-    reason: str
+    client_mac: Optional[str] = None
+    bssid: Optional[str] = None
+    channel: Optional[int] = None
+    interface: Optional[str] = "wlan1"
+    reason: Optional[str] = "Manual deauth"
     operator: Optional[str] = "System"
-    count: int = 5
+    count: int = 0                    # ⬅️ CHANGED from 5 → 0 (continuous by default)
+    capture_handshake: bool = False
 
 
 class BulkDeauthRequest(BaseModel):
     client_macs: List[str]
+    bssid: Optional[str] = None
+    channel: Optional[int] = None
+    interface: Optional[str] = "wlan1"
     reason: str
     operator: Optional[str] = "System"
-    count: int = 5
+    count: int = 0                    # ⬅️ CHANGED from 5 → 0 (continuous by default)
 
 
 class QueueDeauthRequest(BaseModel):

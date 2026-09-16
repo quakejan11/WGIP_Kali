@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from typing import Optional
 import glob
+import time
 
 # Add the backend directory to the path so we can import app modules
 backend_dir = Path(__file__).parent.parent
@@ -17,8 +18,8 @@ from app.services.pcap_monitor import pcap_monitor
 
 router = APIRouter(prefix="/api/kismet", tags=["kismet"])
 
-# ✅ FIX: Use the same path as interfaces.py
-SELECTED_INTERFACE_FILE = Path(__file__).parent.parent.parent / "selected_interface.txt"
+# ✅ HARDCODED INTERFACE (frontend selection removed)
+KISMET_INTERFACE = "wlan1"
 
 def run_command(command):
     """Run a shell command and return the output."""
@@ -56,11 +57,11 @@ def get_kismet_pid():
     return None
 
 def get_selected_interface():
-    """Get the selected interface from the file."""
-    if SELECTED_INTERFACE_FILE.exists():
-        with open(SELECTED_INTERFACE_FILE, "r") as f:
-            return f.read().strip()
-    return None
+    """
+    ✅ Return hardcoded wlan1 instead of reading from file.
+    Frontend interface selection has been removed.
+    """
+    return KISMET_INTERFACE
 
 def invalidate_live_cache():
     """Invalidate the live endpoint cache"""
@@ -84,18 +85,16 @@ def reset_websocket_flag():
 @router.post("/start")
 def start_kismet(background_tasks: BackgroundTasks):
     """
-    Start Kismet on selected interface with REST API enabled.
-    Uses the exact command: sudo kismet -c {interface} --no-daemonize --httpd-rest-api=true --httpd-port=2501 --httpd-allow-cors=true
+    Start Kismet on hardcoded wlan1 interface with REST API enabled.
+    Interface selection has been removed from frontend.
     """
     print("=" * 60)
     print("🚀 START KISMET CALLED")
     print("=" * 60)
     
-    interface = get_selected_interface()
-    print(f"📡 Interface: {interface}")
-    
-    if not interface:
-        raise HTTPException(status_code=400, detail="No interface selected. Please select an interface first.")
+    # ✅ Use hardcoded interface
+    interface = KISMET_INTERFACE
+    print(f"📡 Using hardcoded interface: {interface}")
     
     # Reset WebSocket flag
     reset_websocket_flag()
@@ -104,13 +103,12 @@ def start_kismet(background_tasks: BackgroundTasks):
     if is_kismet_running():
         print("⚠️ Kismet already running, stopping it first...")
         subprocess.run("sudo pkill -9 kismet", shell=True)
-        import time
         time.sleep(2)
     
     # Invalidate cache
     invalidate_live_cache()
     
-    # ✅ Use the exact command you want
+    # ✅ Build the command with hardcoded interface
     cmd = f"sudo kismet -c {interface} --no-daemonize --httpd-rest-api=true --httpd-port=2501 --httpd-allow-cors=true"
     print(f"🔍 Command: {cmd}")
     
@@ -123,7 +121,6 @@ def start_kismet(background_tasks: BackgroundTasks):
             stdin=subprocess.DEVNULL
         )
         
-        import time
         time.sleep(5)
         
         # Check if process is still running
@@ -199,8 +196,6 @@ def stop_kismet():
         print("ℹ️ Kismet is not running")
         return {"message": "Kismet is not running", "status": "stopped"}
     
-    import time
-    
     # 5. Kill Kismet process
     print("🔍 Attempting to stop Kismet...")
     commands = [
@@ -226,7 +221,8 @@ def stop_kismet():
 @router.get("/status")
 def get_kismet_status():
     """Check Kismet status"""
-    interface = get_selected_interface()
+    # ✅ Use hardcoded interface
+    interface = KISMET_INTERFACE
     
     if is_kismet_running():
         pid = get_kismet_pid()
@@ -250,7 +246,8 @@ def get_kismet_status_detailed():
     kismet_running = is_kismet_running()
     pcap_healthy = pcap_monitor.pcap_healthy
     fallback_active = pcap_monitor.fallback_active
-    interface = get_selected_interface()
+    # ✅ Use hardcoded interface
+    interface = KISMET_INTERFACE
     
     return {
         "kismet_running": kismet_running,
@@ -266,7 +263,7 @@ def debug_files():
     result = {
         "home_files": glob.glob(os.path.expanduser("~/Kismet-*.kismet")),
         "root_files": glob.glob("/root/Kismet-*.kismet"),
-        "selected_interface": get_selected_interface(),
+        "interface": KISMET_INTERFACE,  # ✅ Show hardcoded interface
         "kismet_running": is_kismet_running(),
         "kismet_pid": get_kismet_pid()
     }

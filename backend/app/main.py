@@ -14,11 +14,12 @@ from app.api.scan_reports import router as scan_reports_router
 from app.api.device_reports import router as device_reports_router
 from app.api.wifi_reports import router as wifi_reports_router
 from app.api.deauth import router as deauth_router
+from app.api.targets import router as targets_router        # ← NEW
 
 # Import live, interfaces, and kismet routers - ALL from app.api
 from app.api.live import router as live_router
-from app.api.interfaces import router as interfaces_router  # Changed from app.routers
-from app.api.kismet import router as kismet_router          # Changed from app.routers
+from app.api.interfaces import router as interfaces_router
+from app.api.kismet import router as kismet_router
 
 app = FastAPI(
     title="WGIP API",
@@ -29,7 +30,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",      # Vite default
+        "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
@@ -57,6 +58,7 @@ def root():
             "live",
             "interfaces",
             "kismet",
+            "targets",                                          # ← NEW
         ],
     }
 
@@ -88,6 +90,7 @@ app.include_router(scan_reports_router)
 app.include_router(device_reports_router)
 app.include_router(wifi_reports_router)
 app.include_router(deauth_router)
+app.include_router(targets_router)                          # ← NEW
 app.include_router(live_router)
-app.include_router(interfaces_router)  # Now from app.api
-app.include_router(kismet_router)      # Now from app.api
+app.include_router(interfaces_router)
+app.include_router(kismet_router)

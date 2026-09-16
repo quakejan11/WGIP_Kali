@@ -10,6 +10,7 @@ import {
   DeAuthButtons,
 } from '../components/deauth';
 import useDeAuth from '../hooks/useDeAuth';
+import deauthService from '../services/deauthService';
 
 const DeAuthMonitor = () => {
   const {
@@ -59,24 +60,58 @@ const DeAuthMonitor = () => {
     }
   };
 
-  const handleDeauthAP = async (bssid, ssid) => {
+  // ⬇️ UPDATED: Uses /api/deauth/execute with capture_handshake: true
+  const handleDeauthAP = async (bssid, ssid, channel) => {
     const confirmed = window.confirm(
-      `Are you sure you want to deauth ALL clients connected to "${ssid}"?`
+      `Start deauth attack on "${ssid}" and capture handshake?\n\nBSSID: ${bssid}\nChannel: ${channel}`
     );
     if (!confirmed) return;
 
     try {
-      const result = await deauthAP(bssid, `Deauth all clients on ${ssid}`);
-      if (result.success) {
+      const response = await deauthService.executeDeauthFull({
+        bssid,
+        channel,
+        count: 0,                    // 0 = continuous
+        capture_handshake: true,
+        reason: `Deauth from UI: ${ssid}`,
+      });
+
+      const data = response.data;
+
+      if (data.success) {
+        const captureMsg = data.capture?.started
+          ? ' + handshake capture started'
+          : '';
         showNotification(
-          `Deauth successful for ${result.successful_deauths} clients on ${ssid}`,
+          `Attack started on ${ssid}${captureMsg}`,
           'success'
         );
       } else {
-        showNotification(`Deauth failed for ${ssid}`, 'error');
+        showNotification(data.message || `Failed to attack ${ssid}`, 'error');
       }
     } catch (error) {
-      showNotification('Failed to deauth AP', 'error');
+      const detail = error.response?.data?.detail || error.message;
+      showNotification(`Failed to start attack: ${detail}`, 'error');
+    }
+  };
+
+  // ⬇️ NEW: Stop handler
+  const handleStopDeauth = async (bssid) => {
+    const confirmed = window.confirm(`Stop attack on ${bssid}?`);
+    if (!confirmed) return;
+
+    try {
+      const response = await deauthService.stopDeauth(bssid);
+      const data = response.data;
+
+      if (data.success) {
+        showNotification(`Stopped attack on ${bssid}`, 'success');
+      } else {
+        showNotification(data.message || `Failed to stop`, 'error');
+      }
+    } catch (error) {
+      const detail = error.response?.data?.detail || error.message;
+      showNotification(`Failed to stop attack: ${detail}`, 'error');
     }
   };
 
@@ -103,13 +138,10 @@ const DeAuthMonitor = () => {
         </Alert>
       )}
 
-      {/* REMOVED: DeAuthStats component */}
-
+      {/* ⬇️ UPDATED: Pass onStopDeauth too */}
       <DeAuthAPTable
-        aps={aps}
-        loading={loading}
         onDeauthAP={handleDeauthAP}
-        onViewClients={handleViewClients}
+        onStopDeauth={handleStopDeauth}
       />
 
       <DeAuthDeviceTable
@@ -120,8 +152,6 @@ const DeAuthMonitor = () => {
           setDialogOpen(true);
         }}
       />
-
-      {/* REMOVED: DeAuthLogs component */}
 
       <FlagDeviceDialog
         open={dialogOpen}

@@ -2,6 +2,13 @@ import React, { useState, useEffect } from "react";
 import {
   Box,
   Typography,
+  TextField,
+  MenuItem,
+  Button,
+  Stack,
+  Tooltip,
+  IconButton,
+  Chip,
   Table,
   TableBody,
   TableCell,
@@ -10,55 +17,52 @@ import {
   TableRow,
   Paper,
   CircularProgress,
-  Chip,
-  Stack,
-  Button,
-  Tooltip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  TextField,
-  Snackbar,
-  Alert,
+  Snackbar,        // ⬅️ ADDED
+  Alert,           // ⬅️ ADDED
 } from "@mui/material";
-import {
-  SignalWifiOff,
-  SignalWifi4Bar,
-  SignalWifi1Bar,
-  Block,
-} from "@mui/icons-material";
+import { PlayCircleFilled, Stop, Refresh, Search } from "@mui/icons-material";
+import targetService from "../../services/targetService";  // ⬅️ ADDED — adjust path if needed
 
 const tableHeaders = [
   "BSSID",
   "SSID",
-  "MAC Address",
+  "Manufacturer",
+  "Encryption",
   "Channel",
+  "Clients",
+  "Last seen",
+  "Signal",
+  "Location",
   "Actions",
 ];
 
 const LiveOperationSidebar = () => {
+  const [interfaces, setInterfaces] = useState([]);
+  const [interfacesLoading, setInterfacesLoading] = useState(true);
+  const [selectedInterface, setSelectedInterface] = useState("");
+  const [kismetStatus, setKismetStatus] = useState("stopped");
+  const [tempDbStatus, setTempDbStatus] = useState("inactive");
+  const [packetCount, setPacketCount] = useState(0);
+  const [recordsCount, setRecordsCount] = useState(0);
+  const [oldestRecord, setOldestRecord] = useState("");
+  const [newestRecord, setNewestRecord] = useState("");
   const [devices, setDevices] = useState([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
-  const [kismetStatus, setKismetStatus] = useState("stopped");
-  const [recordsCount, setRecordsCount] = useState(0);
-  const [newestRecord, setNewestRecord] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("signal");
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
-  
-  // Deauth state
-  const [deauthDialogOpen, setDeauthDialogOpen] = useState(false);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [deauthCount, setDeauthCount] = useState(10);
-  const [deauthLoading, setDeauthLoading] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "success" });
-
   const itemsPerPage = 10;
 
+  // ⬇️ ADDED: Snackbar state for target-save feedback
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: "",
+    severity: "success",
+  });
+
   useEffect(() => {
-    fetchStatus();
+    fetchInterfaces();
     const statusInterval = setInterval(fetchStatus, 5000);
     return () => clearInterval(statusInterval);
   }, []);
@@ -71,23 +75,41 @@ const LiveOperationSidebar = () => {
     }
   }, [kismetStatus]);
 
+  const fetchInterfaces = async () => {
+    setInterfacesLoading(true);
+    try {
+      const response = await fetch("/api/interfaces");
+      if (!response.ok) throw new Error("Failed to fetch interfaces");
+      const data = await response.json();
+      const interfaceList = data.interfaces || [];
+      setInterfaces(interfaceList);
+      if (interfaceList.length > 0 && !selectedInterface) {
+        setSelectedInterface(interfaceList[0]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch interfaces", err);
+    } finally {
+      setInterfacesLoading(false);
+    }
+  };
+
   const fetchStatus = async () => {
     try {
-      const [kismetRes, liveRes] = await Promise.all([
+      const [kismetRes, tempDbRes] = await Promise.all([
         fetch("/api/kismet/status"),
         fetch("/api/live/status"),
       ]);
 
       const kismetData = await kismetRes.json();
-      const liveData = await liveRes.json();
+      const tempDbData = await tempDbRes.json();
+      const isKismetRunning = kismetData.running || false;
 
-      setKismetStatus(kismetData.running ? "running" : "stopped");
-      setRecordsCount(liveData.total_count || 0);
-
-      if (liveData.newest_record) {
-        const date = new Date(liveData.newest_record);
-        setNewestRecord(date.toLocaleString());
-      }
+      setKismetStatus(isKismetRunning ? "running" : "stopped");
+      setTempDbStatus((tempDbData.total_count || 0) > 0 ? "active" : "inactive");
+      setPacketCount(kismetData.packet_count || 0);
+      setRecordsCount(tempDbData.total_count || 0);
+      setOldestRecord(tempDbData.oldest_record || "");
+      setNewestRecord(tempDbData.newest_record || "");
     } catch (err) {
       console.error("Failed to fetch status", err);
     }
@@ -95,18 +117,12 @@ const LiveOperationSidebar = () => {
 
   const fetchDevices = async () => {
     setLoadingDevices(true);
-
     try {
-      const response = await fetch("/api/live/events/recent?limit=100");
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch devices");
-      }
-
+      const response = await fetch("/api/live/events/recent?limit=1000");
+      if (!response.ok) throw new Error("Failed to fetch devices");
       const data = await response.json();
 
       let devicesData = [];
-
       if (Array.isArray(data)) {
         devicesData = data;
       } else if (data.events) {
@@ -128,18 +144,13 @@ const LiveOperationSidebar = () => {
       }));
 
       const uniqueDevices = {};
-
       transformedDevices.forEach((device) => {
-        if (
-          !uniqueDevices[device.bssid] ||
-          device.signal > uniqueDevices[device.bssid].signal
-        ) {
+        if (!uniqueDevices[device.bssid] || device.signal > uniqueDevices[device.bssid].signal) {
           uniqueDevices[device.bssid] = device;
         }
       });
 
       const finalDevices = Object.values(uniqueDevices);
-
       finalDevices.sort((a, b) => b.signal - a.signal);
 
       setDevices(finalDevices);
@@ -150,23 +161,81 @@ const LiveOperationSidebar = () => {
     }
   };
 
+  const handleStartKismet = async () => {
+    if (!selectedInterface) return;
+    try {
+      await fetch("/api/interfaces/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interface: selectedInterface }),
+      });
+      await fetch("/api/kismet/start", { method: "POST" });
+      setTimeout(fetchStatus, 1000);
+    } catch (err) {
+      console.error("Failed to start Kismet", err);
+    }
+  };
+
+  const handleStopKismet = async () => {
+    try {
+      await fetch("/api/kismet/stop", { method: "POST" });
+      setTimeout(fetchStatus, 1000);
+    } catch (err) {
+      console.error("Failed to stop Kismet", err);
+    }
+  };
+
+  const handleRefresh = () => {
+    fetchStatus();
+    if (kismetStatus === "running") {
+      fetchDevices();
+    }
+  };
+
+  // ⬇️ UPDATED: Save target to backend instead of alert
+  const handleSelectTarget = async (device) => {
+    try {
+      await targetService.saveTarget({
+        bssid: device.bssid,
+        ssid: device.ssid,
+        channel: device.channel,
+        signal: device.signal,
+        handshake: "pending",
+        status: "pending",
+      });
+
+      setSnackbar({
+        open: true,
+        message: `Target saved: ${device.ssid} (${device.bssid})`,
+        severity: "success",
+      });
+    } catch (error) {
+      console.error("Failed to save target:", error);
+      setSnackbar({
+        open: true,
+        message: `Failed to save target: ${error.response?.data?.detail || error.message}`,
+        severity: "error",
+      });
+    }
+  };
+
+  // ⬇️ ADDED: Snackbar close handler
+  const handleSnackbarClose = () => {
+    setSnackbar({ ...snackbar, open: false });
+  };
+
   const handleSort = (column) => {
     const sortMap = {
       BSSID: "bssid",
       SSID: "ssid",
       Manufacturer: "manufacturer",
+      Encryption: "encryption",
       Channel: "channel",
       Clients: "clients",
       "Last seen": "lastSeen",
       Signal: "signal",
     };
-
-    const key = sortMap[column];
-
-    if (!key) {
-      return;
-    }
-
+    const key = sortMap[column] || column.toLowerCase();
     if (sortBy === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
@@ -175,150 +244,100 @@ const LiveOperationSidebar = () => {
     }
   };
 
-  const handleDeauthClick = (device) => {
-    setSelectedDevice(device);
-    setDeauthDialogOpen(true);
-  };
-
-  const handleDeauthConfirm = async () => {
-    if (!selectedDevice) return;
-
-    setDeauthLoading(true);
-
-    try {
-      const response = await fetch("/api/deauth/execute", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          bssid: selectedDevice.bssid,
-          channel: selectedDevice.channel,
-          client_mac: null,
-          count: deauthCount,
-          interface: "wlan1mon",
-          reason: "Deauth from UI",
-          operator: "User",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setSnackbar({
-          open: true,
-          message: `Deauth attack started on ${selectedDevice.bssid} (${deauthCount} packets)`,
-          severity: "success",
-        });
-      } else {
-        setSnackbar({
-          open: true,
-          message: data.detail || "Failed to start deauth attack",
-          severity: "error",
-        });
-      }
-    } catch (error) {
-      console.error("Deauth error:", error);
-      setSnackbar({
-        open: true,
-        message: "Error starting deauth attack",
-        severity: "error",
-      });
-    } finally {
-      setDeauthLoading(false);
-      setDeauthDialogOpen(false);
-      setSelectedDevice(null);
-    }
-  };
-
-  const handleDeauthClose = () => {
-    setDeauthDialogOpen(false);
-    setSelectedDevice(null);
-  };
-
-  const handleSnackbarClose = () => {
-    setSnackbar({ ...snackbar, open: false });
-  };
-
-  const getSignalIcon = (signal) => {
-    if (signal >= -50) {
-      return <SignalWifi4Bar fontSize="small" color="success" />;
-    }
-
-    if (signal >= -60) {
-      return <SignalWifi4Bar fontSize="small" color="warning" />;
-    }
-
-    if (signal >= -70) {
-      return <SignalWifi1Bar fontSize="small" color="warning" />;
-    }
-
-    return <SignalWifiOff fontSize="small" color="error" />;
-  };
-
   const getSignalColor = (signal) => {
     if (signal >= -50) return "#22c55e";
     if (signal >= -60) return "#eab308";
     if (signal >= -70) return "#eab308";
-
     return "#ef4444";
   };
 
-  const sortedDevices = [...devices].sort((a, b) => {
+  const filteredDevices = devices.filter((device) => {
+    if (!searchTerm) return true;
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      device.bssid.toLowerCase().includes(searchLower) ||
+      device.ssid.toLowerCase().includes(searchLower) ||
+      device.manufacturer.toLowerCase().includes(searchLower)
+    );
+  });
+
+  const sortedDevices = [...filteredDevices].sort((a, b) => {
     let valA = a[sortBy] || "";
     let valB = b[sortBy] || "";
-
-    if (typeof valA === "string") {
-      valA = valA.toLowerCase();
-    }
-
-    if (typeof valB === "string") {
-      valB = valB.toLowerCase();
-    }
-
-    if (valA < valB) {
-      return sortDir === "asc" ? -1 : 1;
-    }
-
-    if (valA > valB) {
-      return sortDir === "asc" ? 1 : -1;
-    }
-
+    if (typeof valA === "string") valA = valA.toLowerCase();
+    if (typeof valB === "string") valB = valB.toLowerCase();
+    if (valA < valB) return sortDir === "asc" ? -1 : 1;
+    if (valA > valB) return sortDir === "asc" ? 1 : -1;
     return 0;
   });
 
   const totalPages = Math.ceil(sortedDevices.length / itemsPerPage);
-
   const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedDevices = sortedDevices.slice(startIndex, startIndex + itemsPerPage);
 
-  const paginatedDevices = sortedDevices.slice(
-    startIndex,
-    startIndex + itemsPerPage
-  );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  if (interfacesLoading) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Typography>Loading interfaces...</Typography>
+      </Box>
+    );
+  }
 
   return (
-    <Box
-      sx={{
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        bgcolor: "#f5f7fa",
-        p: 2,
-      }}
-    >
-      <Paper
-        sx={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          borderRadius: 2,
-          border: "1px solid #e0e7ef",
-          overflow: "hidden",
-          minHeight: 0,
-        }}
-      >
-        <TableContainer sx={{ flex: 1 }}>
+    <Box sx={{ width: "100%", height: "100%", bgcolor: "#f5f7fa", p: 2, display: "flex", flexDirection: "column" }}>
+      {/* Controls Bar */}
+      <Paper sx={{ p: 2, mb: 2, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", border: "1px solid #e0e7ef", boxShadow: "none" }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, color: "#065f46", mr: 1 }}>
+          Live Operation
+        </Typography>
+
+        <Button
+          variant="contained"
+          color="success"
+          onClick={handleStartKismet}
+          disabled={kismetStatus === "running" || !selectedInterface}
+          startIcon={<PlayCircleFilled />}
+          sx={{ textTransform: "none" }}
+        >
+          Start
+        </Button>
+
+        <Button
+          variant="contained"
+          color="error"
+          onClick={handleStopKismet}
+          disabled={kismetStatus !== "running"}
+          startIcon={<Stop />}
+          sx={{ textTransform: "none" }}
+        >
+          Stop
+        </Button>
+
+        <Box sx={{ flex: 1 }} />
+
+        <TextField
+          placeholder="Search..."
+          size="small"
+          variant="outlined"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          InputProps={{
+            startAdornment: <Search fontSize="small" sx={{ mr: 0.5 }} />,
+          }}
+          sx={{ width: 180, bgcolor: "#fff" }}
+        />
+        <Button variant="outlined" size="small" onClick={handleRefresh}>
+          Refresh
+        </Button>
+      </Paper>
+
+      {/* Table */}
+      <Paper sx={{ display: "flex", flexDirection: "column", border: "1px solid #e0e7ef", boxShadow: "none", overflow: "hidden" }}>
+        <TableContainer sx={{ overflow: "auto" }}>
           <Table stickyHeader size="small">
             <TableHead>
               <TableRow sx={{ bgcolor: "#f8fafb" }}>
@@ -327,25 +346,19 @@ const LiveOperationSidebar = () => {
                     BSSID: "bssid",
                     SSID: "ssid",
                     Manufacturer: "manufacturer",
+                    Encryption: "encryption",
                     Channel: "channel",
                     Clients: "clients",
                     "Last seen": "lastSeen",
                     Signal: "signal",
                   };
-
-                  const isSortable = Boolean(sortMap[column]);
                   const isSorted = sortBy === sortMap[column];
-
-                  const arrow = isSorted
-                    ? sortDir === "asc"
-                      ? "▲"
-                      : "▼"
-                    : "";
-
+                  const arrow = isSorted ? (sortDir === "asc" ? "▲" : "▼") : "";
+                  const isSortable = column !== "Actions";
                   return (
                     <TableCell
                       key={column}
-                      onClick={() => handleSort(column)}
+                      onClick={() => isSortable && handleSort(column)}
                       sx={{
                         fontWeight: isSorted ? 700 : 600,
                         color: isSorted ? "#065f46" : "#64748b",
@@ -365,18 +378,12 @@ const LiveOperationSidebar = () => {
                 })}
               </TableRow>
             </TableHead>
-
             <TableBody>
               {loadingDevices && devices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
                     <CircularProgress size={40} />
-
-                    <Typography
-                      variant="body2"
-                      color="textSecondary"
-                      sx={{ mt: 2 }}
-                    >
+                    <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
                       Scanning for networks...
                     </Typography>
                   </TableCell>
@@ -384,59 +391,47 @@ const LiveOperationSidebar = () => {
               ) : paginatedDevices.length > 0 ? (
                 paginatedDevices.map((device, index) => (
                   <TableRow key={`${device.bssid}_${index}`} hover>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.75rem",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {device.bssid}
+                    <TableCell sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>{device.bssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem", fontWeight: 500 }}>{device.ssid}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.manufacturer || "Unknown"}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={device.encryption}
+                        size="small"
+                        color={device.encryption === "Open" ? "success" : "warning"}
+                        variant="outlined"
+                        sx={{ fontSize: "0.6rem", height: 20 }}
+                      />
                     </TableCell>
-
-                    <TableCell
-                      sx={{
-                        fontSize: "0.75rem",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {device.ssid}
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.channel}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.clients}</TableCell>
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.lastSeen}</TableCell>
+                    <TableCell>
+                      <Typography sx={{ fontWeight: 500, color: getSignalColor(device.signal), fontSize: "0.7rem" }}>
+                        {device.signal}dBm
+                      </Typography>
                     </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.manufacturer || "Unknown"}
-                    </TableCell>
-
-                    <TableCell sx={{ fontSize: "0.75rem" }}>
-                      {device.channel}
-                    </TableCell>
-
+                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.location || "N/A"}</TableCell>
                     <TableCell align="center">
-                      <Tooltip title={`Attack ${device.ssid}`}>
+                      <Tooltip title={`Select ${device.ssid} as target`}>
                         <Button
-                          size="small"
                           variant="contained"
-                          color="error"
-                          startIcon={<Block sx={{ fontSize: "15px !important" }} />}
-                          onClick={() => handleDeauthClick(device)}
+                          size="small"
+                          onClick={() => handleSelectTarget(device)}
                           sx={{
-                            minWidth: 82,
-                            height: 28,
-                            px: 1.25,
-                            borderRadius: 1.25,
+                            textTransform: "none",
+                            fontSize: "0.65rem",
+                            minWidth: "auto",
+                            px: 1.5,
+                            py: 0.5,
                             bgcolor: "#dc2626",
                             color: "#fff",
-                            fontSize: "0.68rem",
-                            fontWeight: 700,
-                            lineHeight: 1,
-                            textTransform: "none",
-                            boxShadow: "none",
                             "&:hover": {
                               bgcolor: "#b91c1c",
-                              boxShadow: "none",
                             },
                           }}
                         >
-                          Attack
+                          Select Target
                         </Button>
                       </Tooltip>
                     </TableCell>
@@ -444,26 +439,10 @@ const LiveOperationSidebar = () => {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={5} align="center" sx={{ py: 6 }}>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 1,
-                      }}
-                    >
-                      <SignalWifiOff
-                        sx={{
-                          fontSize: 48,
-                          color: "#ccc",
-                        }}
-                      />
-
+                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                    <Box sx={{ textAlign: "center" }}>
                       <Typography variant="body1" color="textSecondary">
-                        {kismetStatus === "running"
-                          ? "No devices detected yet..."
-                          : "Start scanning to see devices"}
+                        {kismetStatus === "running" ? "No devices detected yet..." : "Start scanning to see devices"}
                       </Typography>
                     </Box>
                   </TableCell>
@@ -473,184 +452,89 @@ const LiveOperationSidebar = () => {
           </Table>
         </TableContainer>
 
-        <Box
-          sx={{
-            px: 2,
-            py: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            bgcolor: "#fff",
-            borderTop: "1px solid #e0e7ef",
-            flexShrink: 0,
-            flexWrap: "wrap",
-            gap: 1,
-          }}
-        >
-          <Typography
-            variant="body2"
-            sx={{
-              color: "#64748b",
-              fontSize: "0.75rem",
-            }}
-          >
-            Records: {recordsCount}
-          </Typography>
+        {/* Pagination Footer */}
+        {sortedDevices.length > 0 && (
+          <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", bgcolor: "#fff", borderTop: "1px solid #e0e7ef", flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
+            <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
+              Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, sortedDevices.length)} of {sortedDevices.length} devices
+            </Typography>
 
-          <Typography
-            variant="body2"
-            sx={{
-              color: "#64748b",
-              fontSize: "0.75rem",
-            }}
-          >
-            Newest: {newestRecord || "N/A"}
-          </Typography>
-
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setCurrentPage(1)}
-              disabled={currentPage === 1}
-              sx={{
-                minWidth: 36,
-                px: 1,
-                fontSize: "0.7rem",
-                textTransform: "none",
-              }}
-            >
-              First
-            </Button>
-
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              sx={{
-                minWidth: 36,
-                px: 1,
-                fontSize: "0.7rem",
-                textTransform: "none",
-              }}
-            >
-              Prev
-            </Button>
-
-            {[...Array(Math.min(totalPages, 5))].map((_, i) => {
-              const pageNum = i + 1;
-
-              const isActive = currentPage === pageNum;
-
-              return (
-                <Button
-                  key={pageNum}
-                  size="small"
-                  variant={isActive ? "contained" : "outlined"}
-                  onClick={() => setCurrentPage(pageNum)}
-                  sx={{
-                    minWidth: 32,
-                    px: 0.8,
-                    fontSize: "0.7rem",
-                    borderRadius: 1,
-                    bgcolor: isActive ? "#d1fae5" : "#fff",
-                    borderColor: "#e0e7ef",
-                    color: isActive ? "#065f46" : "#374151",
-                    fontWeight: isActive ? 700 : 500,
-                    boxShadow: "none",
-                    textTransform: "none",
-                  }}
-                >
-                  {pageNum}
-                </Button>
-              );
-            })}
-
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() =>
-                setCurrentPage((p) => Math.min(totalPages, p + 1))
-              }
-              disabled={currentPage === totalPages || totalPages === 0}
-              sx={{
-                minWidth: 36,
-                px: 1,
-                fontSize: "0.7rem",
-                textTransform: "none",
-              }}
-            >
-              Next
-            </Button>
-
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setCurrentPage(totalPages)}
-              disabled={currentPage === totalPages || totalPages === 0}
-              sx={{
-                minWidth: 36,
-                px: 1,
-                fontSize: "0.7rem",
-                textTransform: "none",
-              }}
-            >
-              Last
-            </Button>
-          </Stack>
-        </Box>
+            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
+              >
+                First
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
+              >
+                Prev
+              </Button>
+              {[...Array(Math.min(totalPages, 10))].map((_, i) => {
+                const pageNum = i + 1;
+                const isActive = currentPage === pageNum;
+                return (
+                  <Button
+                    key={pageNum}
+                    size="small"
+                    variant={isActive ? "contained" : "outlined"}
+                    onClick={() => setCurrentPage(pageNum)}
+                    sx={{
+                      minWidth: 32,
+                      px: 0.8,
+                      fontSize: "0.7rem",
+                      borderRadius: 1,
+                      bgcolor: isActive ? "#d1fae5" : "#fff",
+                      borderColor: "#e0e7ef",
+                      color: isActive ? "#065f46" : "#374151",
+                      fontWeight: isActive ? 700 : 500,
+                      boxShadow: "none",
+                      textTransform: "none",
+                    }}
+                  >
+                    {pageNum}
+                  </Button>
+                );
+              })}
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
+              >
+                Next
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
+              >
+                Last
+              </Button>
+            </Stack>
+          </Box>
+        )}
       </Paper>
 
-      {/* Deauth Dialog */}
-      <Dialog open={deauthDialogOpen} onClose={handleDeauthClose}>
-        <DialogTitle>Deauth Attack</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            Send deauthentication packets to disconnect all clients from:
-            <br />
-            <strong>BSSID:</strong> {selectedDevice?.bssid}
-            <br />
-            <strong>SSID:</strong> {selectedDevice?.ssid}
-            <br />
-            <strong>Channel:</strong> {selectedDevice?.channel}
-          </DialogContentText>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Number of packets (0 = unlimited)"
-            type="number"
-            fullWidth
-            variant="outlined"
-            value={deauthCount}
-            onChange={(e) => setDeauthCount(parseInt(e.target.value) || 0)}
-            helperText="0 will send packets continuously until stopped"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleDeauthClose} disabled={deauthLoading}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleDeauthConfirm}
-            color="error"
-            variant="contained"
-            disabled={deauthLoading}
-            startIcon={deauthLoading ? <CircularProgress size={20} /> : <Block />}
-          >
-            {deauthLoading ? "Starting..." : "Start Deauth"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Snackbar for notifications */}
+      {/* ⬇️ ADDED: Snackbar for target-save feedback */}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={6000}
+        autoHideDuration={4000}
         onClose={handleSnackbarClose}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
       >
-        <Alert onClose={handleSnackbarClose} severity={snackbar.severity}>
+        <Alert onClose={handleSnackbarClose} severity={snackbar.severity} variant="filled">
           {snackbar.message}
         </Alert>
       </Snackbar>

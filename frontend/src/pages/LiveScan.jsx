@@ -17,8 +17,11 @@ import {
   TableRow,
   Paper,
   CircularProgress,
+  Snackbar,
+  Alert,
 } from "@mui/material";
 import { PlayCircleFilled, Stop, Refresh, Search } from "@mui/icons-material";
+import targetService from "../services/targetService";
 
 const tableHeaders = [
   "BSSID",
@@ -50,6 +53,12 @@ const LiveOperationSidebar = () => {
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: "",
+    severity: "success",
+  });
 
   useEffect(() => {
     fetchInterfaces();
@@ -182,9 +191,34 @@ const LiveOperationSidebar = () => {
     }
   };
 
-  const handleSelectTarget = (device) => {
-    console.log("Selected target:", device);
-    alert(`Selected target: ${device.ssid} (${device.bssid})`);
+  const handleSelectTarget = async (device) => {
+    try {
+      await targetService.saveTarget({
+        bssid: device.bssid,
+        ssid: device.ssid,
+        channel: device.channel,
+        signal: device.signal,
+        handshake: "pending",
+        status: "pending",
+      });
+
+      setSnackbar({
+        open: true,
+        message: `Target saved: ${device.ssid} (${device.bssid})`,
+        severity: "success",
+      });
+    } catch (error) {
+      console.error("Failed to save target:", error);
+      setSnackbar({
+        open: true,
+        message: `Failed to save target: ${error.response?.data?.detail || error.message}`,
+        severity: "error",
+      });
+    }
+  };
+
+  const handleSnackbarClose = () => {
+    setSnackbar({ ...snackbar, open: false });
   };
 
   const handleSort = (column) => {
@@ -252,7 +286,6 @@ const LiveOperationSidebar = () => {
 
   return (
     <Box sx={{ width: "100%", height: "100%", bgcolor: "#f5f7fa", p: 2, display: "flex", flexDirection: "column" }}>
-      {/* Controls Bar */}
       <Paper sx={{ p: 2, mb: 2, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", border: "1px solid #e0e7ef", boxShadow: "none" }}>
         <Typography variant="h6" sx={{ fontWeight: 600, color: "#065f46", mr: 1 }}>
           Live Operation
@@ -298,7 +331,6 @@ const LiveOperationSidebar = () => {
         </Button>
       </Paper>
 
-      {/* Table */}
       <Paper sx={{ display: "flex", flexDirection: "column", border: "1px solid #e0e7ef", boxShadow: "none", overflow: "hidden" }}>
         <TableContainer sx={{ overflow: "auto" }}>
           <Table stickyHeader size="small">
@@ -415,7 +447,6 @@ const LiveOperationSidebar = () => {
           </Table>
         </TableContainer>
 
-        {/* Pagination Footer */}
         {sortedDevices.length > 0 && (
           <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", bgcolor: "#fff", borderTop: "1px solid #e0e7ef", flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
             <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
@@ -423,22 +454,10 @@ const LiveOperationSidebar = () => {
             </Typography>
 
             <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 First
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Prev
               </Button>
               {[...Array(Math.min(totalPages, 10))].map((_, i) => {
@@ -467,28 +486,27 @@ const LiveOperationSidebar = () => {
                   </Button>
                 );
               })}
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Next
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Last
               </Button>
             </Stack>
           </Box>
         )}
       </Paper>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={handleSnackbarClose}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        <Alert onClose={handleSnackbarClose} severity={snackbar.severity} variant="filled">
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

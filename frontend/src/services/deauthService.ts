@@ -68,10 +68,14 @@ export interface FlagDeviceRequest {
 }
 
 export interface DeauthRequest {
-  client_mac: string;
-  reason: string;
+  client_mac?: string;
+  bssid?: string;
+  channel?: number;
+  interface?: string;
+  reason?: string;
   operator?: string;
   count?: number;
+  capture_handshake?: boolean;
 }
 
 export interface BulkDeauthRequest {
@@ -91,6 +95,16 @@ export interface QueueDeauthRequest {
 export interface UpdateStatusRequest {
   status: 'active' | 'flagged' | 'pending' | 'deauthenticated' | 'blocked';
   notes?: string;
+}
+
+export interface CaptureStatus {
+  bssid: string;
+  capturing: boolean;
+  handshake_detected: boolean;
+  elapsed_seconds: number | null;
+  cap_file: string | null;
+  log_file: string | null;
+  db_handshake_status: string | null;
 }
 
 // ============ API Functions ============
@@ -118,6 +132,66 @@ export const deauthService = {
       '/api/deauth/execute',
       data
     ),
+
+  /**
+   * NEW: Full deauth + handshake capture
+   * Sends { bssid, channel, count, capture_handshake: true }
+   */
+  executeDeauthFull: (data: DeauthRequest) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      status: string;
+      interface?: string;
+      monitor_created?: boolean;
+      capture?: {
+        started: boolean;
+        pid?: number;
+        cap_file?: string;
+        log_file?: string;
+      };
+    }>('/api/deauth/execute', {
+      bssid: data.bssid,
+      channel: data.channel,
+      interface: data.interface,
+      count: data.count ?? 0,
+      reason: data.reason ?? 'Deauth from UI',
+      operator: data.operator ?? 'User',
+      capture_handshake: data.capture_handshake ?? true,
+    }),
+
+  /**
+   * NEW: Stop deauth + capture for a BSSID
+   */
+  stopDeauth: (bssid: string) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      capture_stopped: boolean;
+    }>(`/api/deauth/stop?bssid=${encodeURIComponent(bssid)}`),
+
+  /**
+   * NEW: Check capture status
+   */
+  getCaptureStatus: (bssid: string) =>
+    api.get<CaptureStatus>(`/api/deauth/capture/status/${encodeURIComponent(bssid)}`),
+
+  /**
+   * NEW: Get active deauths
+   */
+  getActiveDeauths: () =>
+    api.get<{
+      active_deauths: Array<{
+        bssid: string;
+        running: boolean;
+        interface?: string;
+        channel?: number;
+        client_mac?: string;
+        start_time?: number;
+        duration?: number;
+      }>;
+      total: number;
+    }>('/api/deauth/active'),
 
   bulkExecuteDeauth: (data: BulkDeauthRequest) =>
     api.post<{
@@ -149,11 +223,16 @@ export const deauthService = {
 
   // Interface Status
   getInterfaceStatus: () =>
-    api.get<{ interface: string; ready: boolean; error?: string }>(
-      '/api/deauth/interface/status'
-    ),
+    api.get<{
+      interface: string;
+      ready: boolean;
+      error?: string;
+      monitor_interfaces?: string[];
+      deauth_ready?: boolean;
+      deauth_interface?: string;
+    }>('/api/deauth/interface/status'),
 
-  // ============ AP Management (NEW) ============
+  // AP Management
   getAPs: (params?: { search?: string; limit?: number; offset?: number }) =>
     api.get<APResponse>('/api/deauth/aps', { params }),
 

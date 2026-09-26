@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { Box, Typography, Alert, Snackbar } from '@mui/material';
 import {
   DeAuthStats,
-  DeAuthDeviceTable,
   DeAuthAPTable,
   DeAuthLogs,
   FlagDeviceDialog,
@@ -47,19 +46,6 @@ const DeAuthMonitor = () => {
     }
   };
 
-  const handleExecuteDeauth = async (clientMac) => {
-    try {
-      const result = await executeDeauth(clientMac);
-      if (result.success) {
-        showNotification(`Deauth successful for ${clientMac}`, 'success');
-      } else {
-        showNotification(`Deauth failed for ${clientMac}`, 'error');
-      }
-    } catch (error) {
-      showNotification('Failed to execute deauth', 'error');
-    }
-  };
-
   // ⬇️ UPDATED: Uses /api/deauth/execute with capture_handshake: true
   const handleDeauthAP = async (bssid, ssid, channel) => {
     const confirmed = window.confirm(
@@ -95,7 +81,7 @@ const DeAuthMonitor = () => {
     }
   };
 
-  // ⬇️ NEW: Stop handler
+  // ⬇️ Stop handler
   const handleStopDeauth = async (bssid) => {
     const confirmed = window.confirm(`Stop attack on ${bssid}?`);
     if (!confirmed) return;
@@ -113,10 +99,6 @@ const DeAuthMonitor = () => {
       const detail = error.response?.data?.detail || error.message;
       showNotification(`Failed to stop attack: ${detail}`, 'error');
     }
-  };
-
-  const handleViewClients = (bssid) => {
-    showNotification(`Showing clients for ${bssid} (coming soon)`, 'info');
   };
 
   return (
@@ -138,20 +120,13 @@ const DeAuthMonitor = () => {
         </Alert>
       )}
 
-      {/* ⬇️ UPDATED: Pass onStopDeauth too */}
+      {/* Selected Targets Table */}
       <DeAuthAPTable
         onDeauthAP={handleDeauthAP}
         onStopDeauth={handleStopDeauth}
       />
 
-      <DeAuthDeviceTable
-        devices={devices}
-        loading={loading}
-        onExecuteDeauth={handleExecuteDeauth}
-        onFlagDevice={() => {
-          setDialogOpen(true);
-        }}
-      />
+      {/* ❌ REMOVED: DeAuthDeviceTable ("Handshake Captured" table) */}
 
       <FlagDeviceDialog
         open={dialogOpen}

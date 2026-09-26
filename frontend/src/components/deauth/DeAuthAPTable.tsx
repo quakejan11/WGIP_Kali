@@ -14,8 +14,11 @@ import {
   Button,
   Stack,
   Tooltip,
+  Snackbar,
+  Alert,
+  IconButton,
 } from '@mui/material';
-import { Block, Delete, Stop } from '@mui/icons-material';
+import { Block, Delete, Stop, ContentCopy, Check } from '@mui/icons-material';
 import targetService from '../../services/targetService';
 
 interface Target {
@@ -28,6 +31,8 @@ interface Target {
   status?: string;
   created_at?: string;
   updated_at?: string;
+  capture_file?: string;         // ⬅️ NEW
+  capture_log?: string;          // ⬅️ NEW
   capture_started_at?: string;
   capture_stopped_at?: string;
 }
@@ -78,6 +83,14 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ⬇️ Copy feedback
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: '',
+    severity: 'success' as 'success' | 'error',
+  });
+
   // Initial fetch + auto-poll every 5s
   useEffect(() => {
     fetchTargets();
@@ -104,6 +117,50 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ⬇️ NEW: Copy full path to clipboard
+  const handleCopyPath = async (text: string, id: number) => {
+    if (!text) {
+      setSnackbar({
+        open: true,
+        message: 'No handshake file available yet',
+        severity: 'error',
+      });
+      return;
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback for non-secure context
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+
+      setCopiedId(id);
+      setSnackbar({
+        open: true,
+        message: `Path copied: ${text.split('/').pop()}`,
+        severity: 'success',
+      });
+
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.error('Copy failed:', err);
+      setSnackbar({
+        open: true,
+        message: 'Failed to copy — check console',
+        severity: 'error',
+      });
     }
   };
 
@@ -246,7 +303,7 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                   />
                 </TableCell>
                 <TableCell sx={{ py: 2.5, px: 2, textAlign: 'center' }}>
-                  <Stack direction="row" spacing={0.75} justifyContent="center" alignItems="center">
+                  <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                     {/* Attack */}
                     <Tooltip title={`Attack ${t.ssid || t.bssid} + capture handshake`}>
                       <Button
@@ -256,9 +313,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                         startIcon={<Block sx={{ fontSize: '15px !important' }} />}
                         onClick={() => onDeauthAP(t.bssid, t.ssid || 'Unknown', t.channel)}
                         sx={{
-                          minWidth: 82,
+                          minWidth: 75,
                           height: 28,
-                          px: 1.25,
+                          px: 1,
                           borderRadius: 1.25,
                           bgcolor: '#dc2626',
                           color: '#fff',
@@ -286,9 +343,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                         startIcon={<Stop sx={{ fontSize: '15px !important' }} />}
                         onClick={() => handleStopAttack(t)}
                         sx={{
-                          minWidth: 78,
+                          minWidth: 65,
                           height: 28,
-                          px: 1.25,
+                          px: 1,
                           borderRadius: 1.25,
                           bgcolor: '#eab308',
                           color: '#fff',
@@ -307,6 +364,45 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                       </Button>
                     </Tooltip>
 
+                    {/* ⬇️ NEW: Copy Path button */}
+                    <Tooltip
+                      title={
+                        t.capture_file
+                          ? `Click to copy full path:\n${t.capture_file}`
+                          : 'No handshake file available yet'
+                      }
+                    >
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleCopyPath(t.capture_file || '', t.id)}
+                          disabled={!t.capture_file}
+                          sx={{
+                            width: 28,
+                            height: 28,
+                            border: '1px solid #e0e7ef',
+                            color: copiedId === t.id ? '#22c55e' : '#64748b',
+                            bgcolor: '#fff',
+                            '&:hover': {
+                              borderColor: '#065f46',
+                              color: '#065f46',
+                              bgcolor: '#f0fdf4',
+                            },
+                            '&:disabled': {
+                              opacity: 0.4,
+                              cursor: 'not-allowed',
+                            },
+                          }}
+                        >
+                          {copiedId === t.id ? (
+                            <Check sx={{ fontSize: 16 }} />
+                          ) : (
+                            <ContentCopy sx={{ fontSize: 14 }} />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+
                     {/* Remove */}
                     <Tooltip title="Remove target">
                       <Button
@@ -316,9 +412,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                         startIcon={<Delete sx={{ fontSize: '15px !important' }} />}
                         onClick={() => handleRemove(t.id)}
                         sx={{
-                          minWidth: 60,
+                          minWidth: 55,
                           height: 28,
-                          px: 1,
+                          px: 0.75,
                           borderRadius: 1.25,
                           fontSize: '0.68rem',
                           textTransform: 'none',
@@ -341,6 +437,22 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* ⬇️ Copy feedback snackbar */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={2500}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          variant="filled"
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 };

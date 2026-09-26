@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
   Typography,
@@ -17,11 +17,11 @@ import {
   TableRow,
   Paper,
   CircularProgress,
-  Snackbar,        // ⬅️ ADDED
-  Alert,           // ⬅️ ADDED
+  Snackbar,
+  Alert,
 } from "@mui/material";
 import { PlayCircleFilled, Stop, Refresh, Search } from "@mui/icons-material";
-import targetService from "../../services/targetService";  // ⬅️ ADDED — adjust path if needed
+import targetService from "../../services/targetService";
 
 const tableHeaders = [
   "BSSID",
@@ -36,40 +36,118 @@ const tableHeaders = [
   "Actions",
 ];
 
+// ⬇️ Cache keys
+const CACHE_KEYS = {
+  DEVICES: "live_operation_devices",
+  PAGE: "live_operation_page",
+  SEARCH: "live_operation_search",
+  SORT: "live_operation_sort",
+  KISMET_STATUS: "live_operation_kismet_status",
+  LAST_FETCH: "live_operation_last_fetch",
+};
+
+// ⬇️ Cache TTL: 30 seconds
+const CACHE_TTL = 30000;
+
 const LiveOperationSidebar = () => {
   const [interfaces, setInterfaces] = useState([]);
   const [interfacesLoading, setInterfacesLoading] = useState(true);
   const [selectedInterface, setSelectedInterface] = useState("");
-  const [kismetStatus, setKismetStatus] = useState("stopped");
+
+  // ⬇️ Initialize state from localStorage
+  const [kismetStatus, setKismetStatus] = useState(
+    () => localStorage.getItem(CACHE_KEYS.KISMET_STATUS) || "stopped"
+  );
   const [tempDbStatus, setTempDbStatus] = useState("inactive");
   const [packetCount, setPacketCount] = useState(0);
   const [recordsCount, setRecordsCount] = useState(0);
   const [oldestRecord, setOldestRecord] = useState("");
   const [newestRecord, setNewestRecord] = useState("");
-  const [devices, setDevices] = useState([]);
+
+  const [devices, setDevices] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEYS.DEVICES);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [loadingDevices, setLoadingDevices] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("signal");
-  const [sortDir, setSortDir] = useState("desc");
-  const [currentPage, setCurrentPage] = useState(1);
+
+  const [searchTerm, setSearchTerm] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SEARCH) || ""
+  );
+
+  const [sortBy, setSortBy] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SORT)?.split("|")[0] || "signal"
+  );
+  const [sortDir, setSortDir] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SORT)?.split("|")[1] || "desc"
+  );
+
+  const [currentPage, setCurrentPage] = useState(
+    () => parseInt(localStorage.getItem(CACHE_KEYS.PAGE) || "1", 10)
+  );
+
   const itemsPerPage = 10;
 
-  // ⬇️ ADDED: Snackbar state for target-save feedback
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: "",
     severity: "success",
   });
 
+  // ⬇️ Track if we've done the initial restore
+  const initialRestoreDone = useRef(false);
+
+  // ⬇️ Save to localStorage whenever state changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(CACHE_KEYS.DEVICES, JSON.stringify(devices));
+    } catch (e) {
+      console.warn("Failed to cache devices:", e);
+    }
+  }, [devices]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.PAGE, String(currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.SEARCH, searchTerm);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.SORT, `${sortBy}|${sortDir}`);
+  }, [sortBy, sortDir]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.KISMET_STATUS, kismetStatus);
+  }, [kismetStatus]);
+
+  // ⬇️ On mount: restore cache + fetch fresh
   useEffect(() => {
     fetchInterfaces();
+    fetchStatus();  // Immediately check real status
+
+    // Only fetch devices if cache is stale
+    const lastFetch = parseInt(localStorage.getItem(CACHE_KEYS.LAST_FETCH) || "0", 10);
+    const age = Date.now() - lastFetch;
+
+    if (kismetStatus === "running" && age > CACHE_TTL) {
+      console.log(`🔄 Cache stale (${Math.round(age / 1000)}s old) — fetching fresh data`);
+      fetchDevices();
+    } else if (kismetStatus === "running") {
+      console.log(`✅ Using cached data (${Math.round(age / 1000)}s old)`);
+    }
+
     const statusInterval = setInterval(fetchStatus, 5000);
     return () => clearInterval(statusInterval);
   }, []);
 
   useEffect(() => {
     if (kismetStatus === "running") {
-      fetchDevices();
       const deviceInterval = setInterval(fetchDevices, 3000);
       return () => clearInterval(deviceInterval);
     }
@@ -154,6 +232,9 @@ const LiveOperationSidebar = () => {
       finalDevices.sort((a, b) => b.signal - a.signal);
 
       setDevices(finalDevices);
+
+      // ⬇️ Update last-fetch timestamp
+      localStorage.setItem(CACHE_KEYS.LAST_FETCH, String(Date.now()));
     } catch (err) {
       console.error("Failed to fetch devices:", err);
     } finally {
@@ -192,7 +273,6 @@ const LiveOperationSidebar = () => {
     }
   };
 
-  // ⬇️ UPDATED: Save target to backend instead of alert
   const handleSelectTarget = async (device) => {
     try {
       await targetService.saveTarget({
@@ -219,7 +299,6 @@ const LiveOperationSidebar = () => {
     }
   };
 
-  // ⬇️ ADDED: Snackbar close handler
   const handleSnackbarClose = () => {
     setSnackbar({ ...snackbar, open: false });
   };
@@ -289,7 +368,6 @@ const LiveOperationSidebar = () => {
 
   return (
     <Box sx={{ width: "100%", height: "100%", bgcolor: "#f5f7fa", p: 2, display: "flex", flexDirection: "column" }}>
-      {/* Controls Bar */}
       <Paper sx={{ p: 2, mb: 2, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap", border: "1px solid #e0e7ef", boxShadow: "none" }}>
         <Typography variant="h6" sx={{ fontWeight: 600, color: "#065f46", mr: 1 }}>
           Live Operation
@@ -335,7 +413,6 @@ const LiveOperationSidebar = () => {
         </Button>
       </Paper>
 
-      {/* Table */}
       <Paper sx={{ display: "flex", flexDirection: "column", border: "1px solid #e0e7ef", boxShadow: "none", overflow: "hidden" }}>
         <TableContainer sx={{ overflow: "auto" }}>
           <Table stickyHeader size="small">
@@ -452,7 +529,6 @@ const LiveOperationSidebar = () => {
           </Table>
         </TableContainer>
 
-        {/* Pagination Footer */}
         {sortedDevices.length > 0 && (
           <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", bgcolor: "#fff", borderTop: "1px solid #e0e7ef", flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
             <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
@@ -460,22 +536,10 @@ const LiveOperationSidebar = () => {
             </Typography>
 
             <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 First
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Prev
               </Button>
               {[...Array(Math.min(totalPages, 10))].map((_, i) => {
@@ -504,22 +568,10 @@ const LiveOperationSidebar = () => {
                   </Button>
                 );
               })}
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Next
               </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-                sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}
-              >
+              <Button size="small" variant="outlined" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} sx={{ minWidth: 36, px: 1, fontSize: "0.7rem", textTransform: "none" }}>
                 Last
               </Button>
             </Stack>
@@ -527,7 +579,6 @@ const LiveOperationSidebar = () => {
         )}
       </Paper>
 
-      {/* ⬇️ ADDED: Snackbar for target-save feedback */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={4000}

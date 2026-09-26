@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Box,
   Typography,
@@ -19,8 +19,10 @@ import {
   CircularProgress,
   Snackbar,
   Alert,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
-import { PlayCircleFilled, Stop, Refresh, Search } from "@mui/icons-material";
+import { PlayCircleFilled, Stop, Refresh, Search, Lock, MyLocation } from "@mui/icons-material";
 import targetService from "../services/targetService";
 
 const tableHeaders = [
@@ -28,6 +30,7 @@ const tableHeaders = [
   "SSID",
   "Manufacturer",
   "Encryption",
+  "Band",
   "Channel",
   "Clients",
   "Last seen",
@@ -36,22 +39,105 @@ const tableHeaders = [
   "Actions",
 ];
 
+// ⬇️ Cache keys + TTL
+const CACHE_KEYS = {
+  DEVICES: "live_operation_devices",
+  PAGE: "live_operation_page",
+  SEARCH: "live_operation_search",
+  SORT: "live_operation_sort",
+  BAND: "live_operation_band",
+  KISMET_STATUS: "live_operation_kismet_status",
+  LAST_FETCH: "live_operation_last_fetch",
+  GPS: "live_operation_gps", // ⬇️ NEW
+};
+const CACHE_TTL = 30000;
+
+// ⬇️ Helper: determine band from channel
+const getBand = (channel) => {
+  if (!channel) return "Unknown";
+  if (channel >= 1 && channel <= 14) return "2.4 GHz";
+  if (channel >= 32 && channel <= 177) return "5 GHz";
+  if (channel >= 1 && channel <= 233) return "6 GHz";
+  return "Unknown";
+};
+
+// ⬇️ Helper: is the device eligible for deauth?
+const isDeauthEligible = (channel) => {
+  const band = getBand(channel);
+  return band === "2.4 GHz";
+};
+
+// ⬇️ NEW: format a GPS fix into a compact string for the table
+const formatGps = (gps) => {
+  if (!gps || gps.lat == null || gps.lon == null) return "N/A";
+  return `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
+};
+
+// ⬇️ NEW: how good is the fix?
+const gpsFixLabel = (fix) => {
+  switch (fix) {
+    case 3: return "3D";
+    case 2: return "2D";
+    case 1: return "No fix";
+    case 0: return "No GPS";
+    default: return "—";
+  }
+};
+
 const LiveOperationSidebar = () => {
   const [interfaces, setInterfaces] = useState([]);
   const [interfacesLoading, setInterfacesLoading] = useState(true);
   const [selectedInterface, setSelectedInterface] = useState("");
-  const [kismetStatus, setKismetStatus] = useState("stopped");
+
+  const [kismetStatus, setKismetStatus] = useState(
+    () => localStorage.getItem(CACHE_KEYS.KISMET_STATUS) || "stopped"
+  );
   const [tempDbStatus, setTempDbStatus] = useState("inactive");
   const [packetCount, setPacketCount] = useState(0);
   const [recordsCount, setRecordsCount] = useState(0);
   const [oldestRecord, setOldestRecord] = useState("");
   const [newestRecord, setNewestRecord] = useState("");
-  const [devices, setDevices] = useState([]);
+
+  // ⬇️ NEW: live GPS state (cached across reloads)
+  const [gps, setGps] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEYS.GPS);
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [devices, setDevices] = useState(() => {
+    try {
+      const cached = localStorage.getItem(CACHE_KEYS.DEVICES);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [loadingDevices, setLoadingDevices] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("signal");
-  const [sortDir, setSortDir] = useState("desc");
-  const [currentPage, setCurrentPage] = useState(1);
+
+  const [searchTerm, setSearchTerm] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SEARCH) || ""
+  );
+
+  const [bandFilter, setBandFilter] = useState(
+    () => localStorage.getItem(CACHE_KEYS.BAND) || "both"
+  );
+
+  const [sortBy, setSortBy] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SORT)?.split("|")[0] || "signal"
+  );
+  const [sortDir, setSortDir] = useState(
+    () => localStorage.getItem(CACHE_KEYS.SORT)?.split("|")[1] || "desc"
+  );
+
+  const [currentPage, setCurrentPage] = useState(
+    () => parseInt(localStorage.getItem(CACHE_KEYS.PAGE) || "1", 10)
+  );
+
   const itemsPerPage = 10;
 
   const [snackbar, setSnackbar] = useState({
@@ -60,17 +146,74 @@ const LiveOperationSidebar = () => {
     severity: "success",
   });
 
+  // ⬇️ Save to localStorage on change
+  useEffect(() => {
+    try {
+      localStorage.setItem(CACHE_KEYS.DEVICES, JSON.stringify(devices));
+    } catch (e) {
+      console.warn("Failed to cache devices:", e);
+    }
+  }, [devices]);
+
+  // ⬇️ NEW: cache GPS
+  useEffect(() => {
+    if (gps) {
+      try {
+        localStorage.setItem(CACHE_KEYS.GPS, JSON.stringify(gps));
+      } catch (e) {
+        console.warn("Failed to cache GPS:", e);
+      }
+    }
+  }, [gps]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.PAGE, String(currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.SEARCH, searchTerm);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.BAND, bandFilter);
+  }, [bandFilter]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.SORT, `${sortBy}|${sortDir}`);
+  }, [sortBy, sortDir]);
+
+  useEffect(() => {
+    localStorage.setItem(CACHE_KEYS.KISMET_STATUS, kismetStatus);
+  }, [kismetStatus]);
+
   useEffect(() => {
     fetchInterfaces();
+    fetchStatus();
+    fetchGps(); // ⬇️ NEW
+
+    const lastFetch = parseInt(localStorage.getItem(CACHE_KEYS.LAST_FETCH) || "0", 10);
+    const age = Date.now() - lastFetch;
+
+    if (kismetStatus === "running" && age > CACHE_TTL) {
+      console.log(`🔄 Cache stale (${Math.round(age / 1000)}s) — fetching fresh`);
+      fetchDevices();
+    } else if (kismetStatus === "running") {
+      console.log(`✅ Using cached data (${Math.round(age / 1000)}s old)`);
+    }
+
     const statusInterval = setInterval(fetchStatus, 5000);
     return () => clearInterval(statusInterval);
   }, []);
 
   useEffect(() => {
     if (kismetStatus === "running") {
-      fetchDevices();
       const deviceInterval = setInterval(fetchDevices, 3000);
-      return () => clearInterval(deviceInterval);
+      // ⬇️ NEW: poll GPS on the same cadence as devices
+      const gpsInterval = setInterval(fetchGps, 3000);
+      return () => {
+        clearInterval(deviceInterval);
+        clearInterval(gpsInterval);
+      };
     }
   }, [kismetStatus]);
 
@@ -114,6 +257,23 @@ const LiveOperationSidebar = () => {
     }
   };
 
+  // ⬇️ NEW: fetch current GPS fix from backend
+  const fetchGps = async () => {
+    try {
+      const res = await fetch("/api/live/gps");
+      if (!res.ok) {
+        // 503 = no fix / Kismet down; clear the marker
+        setGps(null);
+        return;
+      }
+      const data = await res.json();
+      setGps(data);
+    } catch (err) {
+      // Silent — GPS is optional, don't spam the console
+      setGps(null);
+    }
+  };
+
   const fetchDevices = async () => {
     setLoadingDevices(true);
     try {
@@ -130,6 +290,9 @@ const LiveOperationSidebar = () => {
         devicesData = data.data;
       }
 
+      // ⬇️ NEW: grab the latest GPS we know about to stamp each row
+      const gpsSnapshot = gps;
+
       const transformedDevices = devicesData.map((device) => ({
         bssid: device.bssid || "00:00:00:00:00:00",
         ssid: device.essid || device.ssid || "Unknown",
@@ -139,7 +302,11 @@ const LiveOperationSidebar = () => {
         clients: device.clients || device.data?.clients || 0,
         lastSeen: device.last_seen || new Date().toLocaleTimeString(),
         signal: device.signal || -60,
-        location: "N/A",
+        // ⬇️ CHANGED: prefer per-device GPS from the API, fall back to current fix
+        lat: device.data?.lat ?? device.lat ?? gpsSnapshot?.lat ?? null,
+        lon: device.data?.lon ?? device.lon ?? gpsSnapshot?.lon ?? null,
+        alt: device.data?.alt ?? device.alt ?? gpsSnapshot?.alt ?? null,
+        gpsFix: device.data?.gps_fix ?? device.gps_fix ?? gpsSnapshot?.fix ?? null,
       }));
 
       const uniqueDevices = {};
@@ -153,6 +320,7 @@ const LiveOperationSidebar = () => {
       finalDevices.sort((a, b) => b.signal - a.signal);
 
       setDevices(finalDevices);
+      localStorage.setItem(CACHE_KEYS.LAST_FETCH, String(Date.now()));
     } catch (err) {
       console.error("Failed to fetch devices:", err);
     } finally {
@@ -170,6 +338,7 @@ const LiveOperationSidebar = () => {
       });
       await fetch("/api/kismet/start", { method: "POST" });
       setTimeout(fetchStatus, 1000);
+      setTimeout(fetchGps, 1500); // ⬇️ NEW: pick up GPS soon after start
     } catch (err) {
       console.error("Failed to start Kismet", err);
     }
@@ -186,12 +355,23 @@ const LiveOperationSidebar = () => {
 
   const handleRefresh = () => {
     fetchStatus();
+    fetchGps(); // ⬇️ NEW
     if (kismetStatus === "running") {
       fetchDevices();
     }
   };
 
   const handleSelectTarget = async (device) => {
+    // ⬇️ Guard: block 5 GHz
+    if (!isDeauthEligible(device.channel)) {
+      setSnackbar({
+        open: true,
+        message: `Cannot select 5 GHz target — only 2.4 GHz supported`,
+        severity: "error",
+      });
+      return;
+    }
+
     try {
       await targetService.saveTarget({
         bssid: device.bssid,
@@ -200,6 +380,9 @@ const LiveOperationSidebar = () => {
         signal: device.signal,
         handshake: "pending",
         status: "pending",
+        // ⬇️ NEW: include GPS with the saved target
+        lat: device.lat,
+        lon: device.lon,
       });
 
       setSnackbar({
@@ -227,10 +410,12 @@ const LiveOperationSidebar = () => {
       SSID: "ssid",
       Manufacturer: "manufacturer",
       Encryption: "encryption",
+      Band: "channel",
       Channel: "channel",
       Clients: "clients",
       "Last seen": "lastSeen",
       Signal: "signal",
+      Location: "lat", // ⬇️ NEW: sortable
     };
     const key = sortMap[column] || column.toLowerCase();
     if (sortBy === key) {
@@ -249,6 +434,12 @@ const LiveOperationSidebar = () => {
   };
 
   const filteredDevices = devices.filter((device) => {
+    if (bandFilter !== "both") {
+      const band = getBand(device.channel);
+      if (bandFilter === "2.4" && band !== "2.4 GHz") return false;
+      if (bandFilter === "5" && band !== "5 GHz") return false;
+    }
+
     if (!searchTerm) return true;
     const searchLower = searchTerm.toLowerCase();
     return (
@@ -274,7 +465,7 @@ const LiveOperationSidebar = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, bandFilter]);
 
   if (interfacesLoading) {
     return (
@@ -313,7 +504,64 @@ const LiveOperationSidebar = () => {
           Stop
         </Button>
 
+        {/* ⬇️ NEW: live GPS indicator */}
+        <Tooltip
+          title={
+            gps
+              ? `Lat ${gps.lat.toFixed(5)}, Lon ${gps.lon.toFixed(5)} — fix ${gpsFixLabel(gps.fix)}${gps.alt != null ? `, alt ${gps.alt.toFixed(1)}m` : ""}`
+              : "No GPS fix"
+          }
+        >
+          <Chip
+            icon={<MyLocation sx={{ fontSize: "14px !important" }} />}
+            label={
+              gps
+                ? `${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)}`
+                : "No GPS"
+            }
+            size="small"
+            sx={{
+              fontSize: "0.7rem",
+              fontFamily: "monospace",
+              bgcolor: gps ? "#d1fae5" : "#fee2e2",
+              color: gps ? "#065f46" : "#991b1b",
+              fontWeight: 600,
+              border: "1px solid",
+              borderColor: gps ? "#065f46" : "#991b1b",
+            }}
+          />
+        </Tooltip>
+
         <Box sx={{ flex: 1 }} />
+
+        <ToggleButtonGroup
+          value={bandFilter}
+          exclusive
+          onChange={(e, newValue) => {
+            if (newValue !== null) setBandFilter(newValue);
+          }}
+          size="small"
+          sx={{
+            '& .MuiToggleButton-root': {
+              fontSize: '0.7rem',
+              textTransform: 'none',
+              px: 1.5,
+              py: 0.5,
+              borderColor: '#e0e7ef',
+              color: '#64748b',
+              '&.Mui-selected': {
+                bgcolor: '#d1fae5',
+                color: '#065f46',
+                fontWeight: 700,
+                borderColor: '#065f46',
+              },
+            },
+          }}
+        >
+          <ToggleButton value="both">Both</ToggleButton>
+          <ToggleButton value="2.4">2.4 GHz</ToggleButton>
+          <ToggleButton value="5">5 GHz</ToggleButton>
+        </ToggleButtonGroup>
 
         <TextField
           placeholder="Search..."
@@ -342,10 +590,12 @@ const LiveOperationSidebar = () => {
                     SSID: "ssid",
                     Manufacturer: "manufacturer",
                     Encryption: "encryption",
+                    Band: "channel",
                     Channel: "channel",
                     Clients: "clients",
                     "Last seen": "lastSeen",
                     Signal: "signal",
+                    Location: "lat", // ⬇️ NEW
                   };
                   const isSorted = sortBy === sortMap[column];
                   const arrow = isSorted ? (sortDir === "asc" ? "▲" : "▼") : "";
@@ -376,7 +626,7 @@ const LiveOperationSidebar = () => {
             <TableBody>
               {loadingDevices && devices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 6 }}>
                     <CircularProgress size={40} />
                     <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
                       Scanning for networks...
@@ -384,60 +634,108 @@ const LiveOperationSidebar = () => {
                   </TableCell>
                 </TableRow>
               ) : paginatedDevices.length > 0 ? (
-                paginatedDevices.map((device, index) => (
-                  <TableRow key={`${device.bssid}_${index}`} hover>
-                    <TableCell sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>{device.bssid}</TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem", fontWeight: 500 }}>{device.ssid}</TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.manufacturer || "Unknown"}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={device.encryption}
-                        size="small"
-                        color={device.encryption === "Open" ? "success" : "warning"}
-                        variant="outlined"
-                        sx={{ fontSize: "0.6rem", height: 20 }}
-                      />
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.channel}</TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.clients}</TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.lastSeen}</TableCell>
-                    <TableCell>
-                      <Typography sx={{ fontWeight: 500, color: getSignalColor(device.signal), fontSize: "0.7rem" }}>
-                        {device.signal}dBm
-                      </Typography>
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.75rem" }}>{device.location || "N/A"}</TableCell>
-                    <TableCell align="center">
-                      <Tooltip title={`Select ${device.ssid} as target`}>
-                        <Button
-                          variant="contained"
+                paginatedDevices.map((device, index) => {
+                  const band = getBand(device.channel);
+                  const eligible = isDeauthEligible(device.channel);
+                  // ⬇️ NEW: formatted GPS string
+                  const locationText = formatGps(device);
+
+                  return (
+                    <TableRow key={`${device.bssid}_${index}`} hover>
+                      <TableCell sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>{device.bssid}</TableCell>
+                      <TableCell sx={{ fontSize: "0.75rem", fontWeight: 500 }}>{device.ssid}</TableCell>
+                      <TableCell sx={{ fontSize: "0.75rem" }}>{device.manufacturer || "Unknown"}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={device.encryption}
                           size="small"
-                          onClick={() => handleSelectTarget(device)}
+                          color={device.encryption === "Open" ? "success" : "warning"}
+                          variant="outlined"
+                          sx={{ fontSize: "0.6rem", height: 20 }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={band}
+                          size="small"
+                          variant="filled"
                           sx={{
-                            textTransform: "none",
                             fontSize: "0.65rem",
-                            minWidth: "auto",
-                            px: 1.5,
-                            py: 0.5,
-                            bgcolor: "#dc2626",
-                            color: "#fff",
-                            "&:hover": {
-                              bgcolor: "#b91c1c",
-                            },
+                            height: 20,
+                            fontWeight: 600,
+                            bgcolor: band === "2.4 GHz" ? "#dbeafe" :
+                                     band === "5 GHz" ? "#fce7f3" :
+                                     "#e5e7eb",
+                            color: band === "2.4 GHz" ? "#1e40af" :
+                                   band === "5 GHz" ? "#9d174d" :
+                                   "#374151",
                           }}
+                        />
+                      </TableCell>
+                      <TableCell sx={{ fontSize: "0.75rem" }}>{device.channel}</TableCell>
+                      <TableCell sx={{ fontSize: "0.75rem" }}>{device.clients}</TableCell>
+                      <TableCell sx={{ fontSize: "0.75rem" }}>{device.lastSeen}</TableCell>
+                      <TableCell>
+                        <Typography sx={{ fontWeight: 500, color: getSignalColor(device.signal), fontSize: "0.7rem" }}>
+                          {device.signal}dBm
+                        </Typography>
+                      </TableCell>
+                      {/* ⬇️ CHANGED: real GPS string */}
+                      <TableCell sx={{ fontSize: "0.7rem", fontFamily: "monospace", color: locationText === "N/A" ? "#9ca3af" : "#065f46" }}>
+                        {locationText}
+                      </TableCell>
+                      <TableCell align="center">
+                        {/* ⬇️ UPDATED: Disabled for 5 GHz */}
+                        <Tooltip
+                          title={
+                            eligible
+                              ? `Select ${device.ssid} as target`
+                              : `⚠️ 5 GHz not supported for deauth — only 2.4 GHz`
+                          }
                         >
-                          Select Target
-                        </Button>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
+                          <span>
+                            <Button
+                              variant="contained"
+                              size="small"
+                              onClick={() => handleSelectTarget(device)}
+                              disabled={!eligible}
+                              startIcon={!eligible ? <Lock sx={{ fontSize: "14px !important" }} /> : null}
+                              sx={{
+                                textTransform: "none",
+                                fontSize: "0.65rem",
+                                minWidth: "auto",
+                                px: 1.5,
+                                py: 0.5,
+                                bgcolor: "#dc2626",
+                                color: "#fff",
+                                "&:hover": {
+                                  bgcolor: "#b91c1c",
+                                },
+                                "&:disabled": {
+                                  bgcolor: "#e5e7eb",
+                                  color: "#9ca3af",
+                                  cursor: "not-allowed",
+                                },
+                              }}
+                            >
+                              {eligible ? "Select Target" : "5 GHz"}
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={10} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 6 }}>
                     <Box sx={{ textAlign: "center" }}>
                       <Typography variant="body1" color="textSecondary">
-                        {kismetStatus === "running" ? "No devices detected yet..." : "Start scanning to see devices"}
+                        {kismetStatus === "running"
+                          ? (bandFilter !== "both"
+                              ? `No ${bandFilter === "2.4" ? "2.4 GHz" : "5 GHz"} devices detected yet...`
+                              : "No devices detected yet...")
+                          : "Start scanning to see devices"}
                       </Typography>
                     </Box>
                   </TableCell>
@@ -451,6 +749,7 @@ const LiveOperationSidebar = () => {
           <Box sx={{ px: 2, py: 1, display: "flex", alignItems: "center", justifyContent: "space-between", bgcolor: "#fff", borderTop: "1px solid #e0e7ef", flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
             <Typography variant="body2" sx={{ color: "#64748b", fontSize: "0.75rem" }}>
               Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, sortedDevices.length)} of {sortedDevices.length} devices
+              {bandFilter !== "both" && ` (${bandFilter === "2.4" ? "2.4 GHz" : "5 GHz"} only)`}
             </Typography>
 
             <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
@@ -499,7 +798,7 @@ const LiveOperationSidebar = () => {
 
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={4000}
+        autoCloseDuration={4000}
         onClose={handleSnackbarClose}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
       >

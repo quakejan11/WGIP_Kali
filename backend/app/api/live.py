@@ -22,7 +22,7 @@ kismet_connector = KismetConnector()
 
 # Kismet REST API config
 KISMET_USER = "wardriving"
-KISMET_PASS = "wardriving"
+KISMET_PASS = "kali"
 KISMET_BASE = "http://localhost:2501"
 
 # Cache for data
@@ -46,14 +46,80 @@ def decode_bytes(value):
     return str(value)
 
 
+def count_clients(dev: dict) -> int:
+    """
+    Count clients associated with an AP from Kismet's device record.
+
+    Modern Kismet exposes:
+      - dot11.device.num_associated_clients  → int, pre-computed count
+      - dot11.device.associated_client_map   → dict, {mac: {...}}
+
+    Older/alternate builds exposed client maps nested under
+    dot11.device.advertised_ssid_map[*].dot11.advertised_ssid.client_map
+    (note: no underscore between 'advertised' and 'ssid' in the inner keys).
+    Fall through to those older shapes for compatibility.
+    """
+    try:
+        dot11 = dev.get("dot11.device")
+        if not isinstance(dot11, dict):
+            return 0
+
+        # Preferred: pre-computed integer
+        n = dot11.get("dot11.device.num_associated_clients")
+        if isinstance(n, int) and n >= 0:
+            return n
+
+        # Fallback: count the associated_client_map
+        acm = dot11.get("dot11.device.associated_client_map")
+        if isinstance(acm, dict):
+            return len(acm)
+        if isinstance(acm, list):
+            return len(acm)
+
+        # Legacy fallback: advertised_ssid_map[*].dot11.advertisedssid.client_map
+        ssid_map = dot11.get("dot11.device.advertised_ssid_map")
+        if not ssid_map:
+            return 0
+
+        entries = ssid_map.values() if isinstance(ssid_map, dict) else ssid_map
+
+        total = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            # Try both spellings, plus the map directly on the entry
+            for key in (
+                "dot11.advertisedssid.client_map",
+                "dot11.advertised_ssid.client_map",
+                "dot11.advertisedssid.associated_client_map",
+                "dot11.advertised_ssid.associated_client_map",
+            ):
+                cm = entry.get(key)
+                if isinstance(cm, dict):
+                    total += len(cm)
+                    break
+                if isinstance(cm, list):
+                    total += len(cm)
+                    break
+
+        return total
+    except Exception as e:
+        print(f"⚠️ count_clients failed: {e}")
+        return 0
+
+
 def extract_device_info(device_json):
+    """
+    Parse a Kismet device JSON blob.
+    Returns (name, vendor, channel, encryption, signal, clients).
+    """
     try:
         if isinstance(device_json, str):
             data = json.loads(device_json)
         elif isinstance(device_json, bytes):
             data = json.loads(device_json.decode('utf-8', errors='ignore'))
         else:
-            return None, None, 1, 'Unknown', -60
+            return None, None, 1, 'Unknown', -60, 0
 
         name = data.get('kismet.device.base.name', '')
         if not name:
@@ -77,9 +143,11 @@ def extract_device_info(device_json):
         if isinstance(signal, dict):
             signal = signal.get('kismet.common.signal.last_signal', -60)
 
-        return name, vendor, channel, encryption, signal
+        clients = count_clients(data)
+
+        return name, vendor, channel, encryption, signal, clients
     except Exception:
-        return None, None, 1, 'Unknown', -60
+        return None, None, 1, 'Unknown', -60, 0
 
 
 def stop_websocket_connections():
@@ -196,6 +264,14 @@ def get_networks_from_kismet_rest():
         print(f"❌ Kismet REST error: {e}")
         return []
 
+    if not isinstance(devices, list):
+        print(f"⚠️ Unexpected REST response type: {type(devices)}")
+        return []
+
+    if not devices:
+        print("ℹ️ REST returned 0 APs (Kismet may still be warming up)")
+        return []
+
     # Grab current GPS once for this batch
     gps = get_gps_location()
 
@@ -223,7 +299,7 @@ def get_networks_from_kismet_rest():
             "channel": dev.get("kismet.device.base.channel", 1),
             "signal": signal,
             "security": dev.get("kismet.device.base.crypt", "Unknown"),
-            "clients": 0,
+            "clients": count_clients(dev),
             "vendor": dev.get("kismet.device.base.manuf", ""),
             "last_seen": last_seen_dt.strftime("%H:%M:%S"),
             "timestamp": last_seen_dt,
@@ -290,7 +366,7 @@ def get_networks_from_file():
             signal = row[2] if row[2] is not None else -60
             last_time_val = row[3] if row[3] is not None else time.time()
 
-            name, vendor, channel, encryption, json_signal = extract_device_info(device_json)
+            name, vendor, channel, encryption, json_signal, clients = extract_device_info(device_json)
             if json_signal and json_signal != -60:
                 signal = json_signal
 
@@ -312,7 +388,7 @@ def get_networks_from_file():
                 "channel": channel if channel else 1,
                 "signal": signal,
                 "security": encryption if encryption else "Unknown",
-                "clients": 0,
+                "clients": clients,
                 "vendor": vendor if vendor else "",
                 "last_seen": last_seen_dt.strftime("%H:%M:%S"),
                 "timestamp": last_seen_dt,

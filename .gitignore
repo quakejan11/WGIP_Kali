@@ -57,3 +57,4 @@ backend/wgip_scan_result_*.pdf
 *.kismet
 *.kismet
 *.kismet-journal
+backend/captures/raw/*.cap

@@ -30,6 +30,12 @@ export const targetService = {
 
   // Clear all targets
   clearAllTargets: () => api.delete('/api/targets'),
+
+  // ⬇️ NEW — download the .cap capture file for a target
+  downloadCapture: (id) =>
+    api.get(`/api/targets/${id}/capture`, {
+      responseType: 'blob',
+    }),
 };
 
 export default targetService;

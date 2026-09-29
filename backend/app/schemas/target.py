@@ -23,7 +23,6 @@ class TargetUpdate(BaseModel):
     signal: Optional[int] = None
     handshake: Optional[str] = None
     status: Optional[str] = None
-    # ⬇️ NEW
     capture_file: Optional[str] = None
     capture_log: Optional[str] = None
     capture_pid: Optional[int] = None
@@ -34,7 +33,6 @@ class TargetUpdate(BaseModel):
 
 class TargetResponse(TargetBase):
     id: int
-    # ⬇️ NEW
     capture_file: Optional[str] = None
     capture_log: Optional[str] = None
     capture_pid: Optional[int] = None
@@ -43,6 +41,11 @@ class TargetResponse(TargetBase):
     capture_stopped_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+    # ⬇️ NEW: filesystem truth — is there a downloadable .cap for this target?
+    # Computed in the API layer (see _to_response in app/api/targets.py).
+    # Kept on the response model so FastAPI doesn't strip it during serialization.
+    has_capture: bool = False
 
     class Config:
         from_attributes = True

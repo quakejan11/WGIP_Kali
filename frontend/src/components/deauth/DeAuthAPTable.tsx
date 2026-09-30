@@ -45,22 +45,39 @@ interface DeAuthAPTableProps {
   onStopDeauth?: (bssid: string) => void;
 }
 
+// ─── Helper: Signal Color ───
+const getSignalColor = (signal?: number): string => {
+  if (typeof signal !== 'number') return '#64748b';
+  if (signal >= -50) return '#22c55e';
+  if (signal >= -70) return '#eab308';
+  return '#ef4444';
+};
+
 const getDeAuthStatusColor = (status?: string) => {
   switch (status?.toLowerCase()) {
-    case 'success': return 'success';
-    case 'failed': return 'error';
-    default: return 'default';
+    case 'success':
+      return 'success';
+    case 'failed':
+      return 'error';
+    default:
+      return 'default';
   }
 };
 
 const getHandshakeStatusColor = (status?: string) => {
   switch (status?.toLowerCase()) {
-    case 'captured': return 'success';
-    case 'success': return 'success';
-    case 'failed': return 'error';
-    case 'capturing': return 'info';
-    case 'pending': return 'warning';
-    default: return 'default';
+    case 'captured':
+      return 'success';
+    case 'success':
+      return 'success';
+    case 'failed':
+      return 'error';
+    case 'capturing':
+      return 'info';
+    case 'pending':
+      return 'warning';
+    default:
+      return 'default';
   }
 };
 
@@ -86,7 +103,9 @@ const parseFilenameFromHeader = (header?: string | null): string | null => {
   const starMatch = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
   if (starMatch?.[1]) {
     try {
-      return decodeURIComponent(starMatch[1].trim().replace(/^["']|["']$/g, ''));
+      return decodeURIComponent(
+        starMatch[1].trim().replace(/^["']|["']$/g, '')
+      );
     } catch {
       /* fall through */
     }
@@ -98,12 +117,17 @@ const parseFilenameFromHeader = (header?: string | null): string | null => {
   return null;
 };
 
-const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth }) => {
+const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({
+  onDeauthAP,
+  onStopDeauth,
+}) => {
   const [targets, setTargets] = useState<Target[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [attackingBssids, setAttackingBssids] = useState<Set<string>>(new Set());
+  const [attackingBssids, setAttackingBssids] = useState<Set<string>>(
+    new Set()
+  );
 
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [snackbar, setSnackbar] = useState({
@@ -154,7 +178,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
     } catch (err: any) {
       console.error('Failed to fetch targets:', err);
       if (targets.length === 0) {
-        setError(err.response?.data?.detail || err.message || 'Failed to fetch targets');
+        setError(
+          err.response?.data?.detail || err.message || 'Failed to fetch targets'
+        );
       }
     } finally {
       setLoading(false);
@@ -168,7 +194,8 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
     if (h === 'capturing') return true;
     if (['captured', 'success', 'failed', 'error'].includes(h)) return false;
     if (typeof t.capture_pid === 'number' && t.capture_pid > 0) return true;
-    if (['active', 'running', 'attacking', 'capturing'].includes(s)) return true;
+    if (['active', 'running', 'attacking', 'capturing'].includes(s))
+      return true;
     return attackingBssids.has(t.bssid);
   };
 
@@ -216,10 +243,11 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
           : new Blob([response], { type: 'application/octet-stream' });
 
       const headerFilename = parseFilenameFromHeader(
-        response?.headers?.['content-disposition'],
+        response?.headers?.['content-disposition']
       );
       const fallbackFilename =
-        (t.capture_file && t.capture_file.split('/').pop()) || `capture_${t.id}.cap`;
+        (t.capture_file && t.capture_file.split('/').pop()) ||
+        `capture_${t.id}.cap`;
       const serverFilename = headerFilename || fallbackFilename;
 
       const url = window.URL.createObjectURL(blob);
@@ -314,13 +342,32 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
         <Table size="medium">
           <TableHead>
             <TableRow>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>SSID</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>BSSID / MAC</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>Channel</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>Signal</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>DeAuth Status</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>HandShake Status</TableCell>
-              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem', textAlign: 'center' }}>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                SSID
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                BSSID / MAC
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                Channel
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                Signal
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                DeAuth Status
+              </TableCell>
+              <TableCell sx={{ fontWeight: 600, py: 2, fontSize: '0.85rem' }}>
+                HandShake Status
+              </TableCell>
+              <TableCell
+                sx={{
+                  fontWeight: 600,
+                  py: 2,
+                  fontSize: '0.85rem',
+                  textAlign: 'center',
+                }}
+              >
                 Actions
               </TableCell>
             </TableRow>
@@ -330,14 +377,24 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
               const active = isAttacking(t);
               const downloading = downloadingId === t.id;
               return (
-                <TableRow key={t.id} hover sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
+                <TableRow
+                  key={t.id}
+                  hover
+                  sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
+                >
                   <TableCell sx={{ py: 2.5, px: 2 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.9rem' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontWeight: 500, fontSize: '0.9rem' }}
+                    >
                       {t.ssid || 'Unknown'}
                     </Typography>
                   </TableCell>
                   <TableCell sx={{ py: 2.5, px: 2 }}>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                    >
                       {t.bssid}
                     </Typography>
                   </TableCell>
@@ -349,21 +406,22 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                       sx={{ fontSize: '0.75rem' }}
                     />
                   </TableCell>
+
+                  {/* ✅ FIXED: Signal column with null check */}
                   <TableCell sx={{ py: 2.5, px: 2 }}>
                     <Typography
                       variant="body2"
                       sx={{
                         fontSize: '0.85rem',
-                        color:
-                          t.signal >= -50 ? '#22c55e' :
-                          t.signal >= -60 ? '#eab308' :
-                          t.signal >= -70 ? '#eab308' :
-                          '#ef4444',
+                        color: getSignalColor(t.signal),
                       }}
                     >
-                      {t.signal ? `${t.signal} dBm` : 'N/A'}
+                      {typeof t.signal === 'number'
+                        ? `${t.signal} dBm`
+                        : 'N/A'}
                     </Typography>
                   </TableCell>
+
                   <TableCell sx={{ py: 2.5, px: 2 }}>
                     <Chip
                       label={t.status || 'pending'}
@@ -374,13 +432,17 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                         fontSize: '0.75rem',
                         fontWeight: 500,
                         bgcolor:
-                          t.status?.toLowerCase() === 'success' ? '#22c55e' :
-                          t.status?.toLowerCase() === 'failed' ? '#dc2626' :
-                          '#e5e7eb',
+                          t.status?.toLowerCase() === 'success'
+                            ? '#22c55e'
+                            : t.status?.toLowerCase() === 'failed'
+                            ? '#dc2626'
+                            : '#e5e7eb',
                         color:
-                          t.status?.toLowerCase() === 'success' ? '#fff' :
-                          t.status?.toLowerCase() === 'failed' ? '#fff' :
-                          '#374151',
+                          t.status?.toLowerCase() === 'success'
+                            ? '#fff'
+                            : t.status?.toLowerCase() === 'failed'
+                            ? '#fff'
+                            : '#374151',
                       }}
                     />
                   </TableCell>
@@ -397,8 +459,17 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                       }}
                     />
                   </TableCell>
+
+                  {/* ✅ FIXED: Stack with justifyContent/alignItems sa sx */}
                   <TableCell sx={{ py: 2.5, px: 2, textAlign: 'center' }}>
-                    <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+                    <Stack
+                      direction="row"
+                      spacing={0.5}
+                      sx={{
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                    >
                       {/* Attack */}
                       <Tooltip
                         title={
@@ -412,7 +483,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                             size="small"
                             variant="contained"
                             color="error"
-                            startIcon={<Block sx={{ fontSize: '15px !important' }} />}
+                            startIcon={
+                              <Block sx={{ fontSize: '15px !important' }} />
+                            }
                             onClick={() => handleAttackClick(t)}
                             disabled={active}
                             sx={{
@@ -455,7 +528,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                             size="small"
                             variant="contained"
                             color="warning"
-                            startIcon={<Stop sx={{ fontSize: '15px !important' }} />}
+                            startIcon={
+                              <Stop sx={{ fontSize: '15px !important' }} />
+                            }
                             onClick={() => handleStopAttack(t)}
                             disabled={!active}
                             sx={{
@@ -516,7 +591,10 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                             }}
                           >
                             {downloading ? (
-                              <CircularProgress size={14} sx={{ color: '#22c55e' }} />
+                              <CircularProgress
+                                size={14}
+                                sx={{ color: '#22c55e' }}
+                              />
                             ) : (
                               <Download sx={{ fontSize: 16 }} />
                             )}
@@ -530,7 +608,9 @@ const DeAuthAPTable: React.FC<DeAuthAPTableProps> = ({ onDeauthAP, onStopDeauth 
                           size="small"
                           variant="outlined"
                           color="error"
-                          startIcon={<Delete sx={{ fontSize: '15px !important' }} />}
+                          startIcon={
+                            <Delete sx={{ fontSize: '15px !important' }} />
+                          }
                           onClick={() => handleRemove(t.id)}
                           sx={{
                             minWidth: 55,

@@ -1,0 +1,74 @@
+/* src/components/SignalMap/SignalMapView.css */
+
+/* ─── Radar Sweep Animation ─── */
+@keyframes radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+  transform-origin: 50px 50px;
+}
+
+.animate-radar-sweep-fast {
+  animation: radar-sweep 2s linear infinite;
+  transform-origin: 50px 50px;
+}
+
+/* ─── Sonar Ring Animation ─── */
+@keyframes radar-ring {
+  0% {
+    transform: scale(0.3);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+.animate-radar-ring {
+  animation: radar-ring 2.5s ease-out infinite;
+  transform-origin: 50px 50px;
+}
+
+.animate-radar-ring-delayed {
+  animation: radar-ring 2.5s ease-out infinite;
+  animation-delay: 1.25s;
+  transform-origin: 50px 50px;
+}
+
+/* ─── Blip Ping Animation ─── */
+@keyframes blip-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  75%, 100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+.animate-blip-ping {
+  animation: blip-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* ─── Active Radar Dot Pulse ─── */
+@keyframes active-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.animate-active-dot {
+  animation: active-dot-pulse 1.5s ease-in-out infinite;
+}

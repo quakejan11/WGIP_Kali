@@ -1,5 +1,12 @@
 // src/components/SignalMap/SignalMapView.jsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  memo,
+} from 'react';
 import {
   Box,
   Paper,
@@ -23,6 +30,7 @@ import {
   PlayArrow,
   Pause,
   CenterFocusStrong,
+  Lock,
 } from '@mui/icons-material';
 import {
   getSignalMeta,
@@ -30,39 +38,389 @@ import {
 } from './SignalMeter';
 import './SignalMapView.css';
 
+// ─── Zoom constants ───
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 3.0;
 const ZOOM_STEP = 0.25;
 
+// ─── Timing ───
+const HISTORY_WINDOW_MS = 10000;
+const POLL_DEVICES_MS = 3000;
+const POLL_GPS_MS = 3000;
+const POLL_STATUS_MS = 5000;
+
+// ─── Performance caps ───
+const MAX_EMITTERS = 150;         // only render top-N strongest
+const MAX_HISTORY_ENTRIES = 400;  // hard cap on tracked BSSIDs
+
+// ─── Cache ───
+const CACHE_KEYS = {
+  DEVICES: 'signal_map_devices',
+  GPS: 'signal_map_gps',
+  LAST_FETCH: 'signal_map_last_fetch',
+};
+const CACHE_TTL_MS = 30000;
+
+// ─── Safe localStorage helpers ───
+const readCache = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+const writeCache = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn('cache write failed', e);
+  }
+};
+const isCacheFresh = () => {
+  const last = parseInt(readCache(CACHE_KEYS.LAST_FETCH, 0), 10);
+  return Date.now() - last < CACHE_TTL_MS;
+};
+
+// ─── Helpers ───
+const getBand = (channel) => {
+  const ch = Number(channel);
+  if (!ch || Number.isNaN(ch)) return 'Unknown';
+  if (ch >= 1 && ch <= 14) return '2.4 GHz';
+  if (ch >= 32 && ch <= 177) return '5 GHz';
+  if (ch >= 178 && ch <= 233) return '6 GHz';
+  return 'Unknown';
+};
+
+const isDeauthEligible = (channel) => {
+  const ch = Number(channel);
+  if (!ch || Number.isNaN(ch)) return false;
+  return ch >= 1 && ch <= 14;
+};
+
+const formatGps = (lat, lon) => {
+  if (lat == null || lon == null) return 'N/A';
+  return `${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`;
+};
+
+// ─── Memoized emitter dot ───
+const EmitterDot = memo(function EmitterDot({
+  net,
+  x,
+  y,
+  isSelected,
+  isPinged,
+  zoomLevel,
+  labelBelow,
+  onSelect,
+}) {
+  const meta = getSignalMeta(net.signal);
+  const baseScale = Math.max(0.65, Math.min(1.2, 1 / Math.sqrt(zoomLevel)));
+  const scale = isSelected ? baseScale * 1.06 : baseScale;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(net.id)}
+      className={`emitter-dot${isSelected ? ' is-selected' : ''}${
+        isPinged ? ' is-pinged' : ''
+      }`}
+      style={{
+        left: `${x}%`,
+        top: `${y}%`,
+        transform: `translate(-50%, -50%) scale(${scale})`,
+      }}
+    >
+      {!labelBelow && (
+        <span className="emitter-label" style={{ marginBottom: 4 }}>
+          {net.ssid} ({net.signal} dBm)
+        </span>
+      )}
+
+      <span className="emitter-marker-wrap">
+        {(isSelected || isPinged) && <span className="emitter-ping" />}
+        <span
+          className="emitter-marker"
+          style={{
+            backgroundColor: meta.barColor,
+            boxShadow: `0 0 5px 1.5px ${meta.barColor}ee`,
+          }}
+        />
+      </span>
+
+      {labelBelow && (
+        <span className="emitter-label" style={{ marginTop: 4 }}>
+          {net.ssid} ({net.signal} dBm)
+        </span>
+      )}
+    </button>
+  );
+});
+
 const SignalMapView = ({
-  networks = [],
-  bandFilter = 'Both',
+  networks: networksProp,
+  bandFilter: bandFilterProp,
   onBandFilterChange,
-  gpsEnabled = false,
+  gpsEnabled: gpsEnabledProp,
   onToggleGps = () => {},
   onSendToDeAuth = () => {},
 }) => {
-  const [selectedNetId, setSelectedNetId] = useState(networks[0]?.id || '');
+  // ─── Live state (seeded from cache) ───
+  const [liveDevices, setLiveDevices] = useState(() =>
+    isCacheFresh() ? readCache(CACHE_KEYS.DEVICES, []) : []
+  );
+  const [liveGps, setLiveGps] = useState(() =>
+    readCache(CACHE_KEYS.GPS, null)
+  );
+  const [liveBandFilter, setLiveBandFilter] = useState('Both');
+  const [kismetRunning, setKismetRunning] = useState(false);
+
+  const historyRef = useRef({});
+  const lastSignatureRef = useRef('');
+
+  // ─── UI state ───
+  const [selectedNetId, setSelectedNetId] = useState('');
   const [isRadarActive, setIsRadarActive] = useState(true);
   const [fastSweep, setFastSweep] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [sweepAngle, setSweepAngle] = useState(0);
   const [isFullScreen, setIsFullScreen] = useState(false);
 
   const containerRef = useRef(null);
   const dragStartRef = useRef(null);
 
-  const filteredNetworks =
-    bandFilter === 'Both'
-      ? networks
-      : networks.filter((n) => n.band === bandFilter);
+  const sweepPeriod = fastSweep ? 2 : 4;
 
-  const selectedNet =
-    filteredNetworks.find((n) => n.id === selectedNetId) || filteredNetworks[0];
+  // ─── Live fetching ───
+  useEffect(() => {
+    if (networksProp !== undefined) return;
 
-  // ─── Fullscreen API + Escape key handler ───
+    let cancelled = false;
+
+    const clearLive = () => {
+      historyRef.current = {};
+      lastSignatureRef.current = '';
+      if (!cancelled) {
+        setLiveDevices([]);
+        setSelectedNetId('');
+      }
+      try {
+        localStorage.removeItem(CACHE_KEYS.DEVICES);
+        localStorage.removeItem(CACHE_KEYS.LAST_FETCH);
+      } catch {}
+    };
+
+    const fetchStatus = async () => {
+      try {
+        const r = await fetch('/api/kismet/status');
+        const d = await r.json();
+        const running = !!d.running;
+        if (cancelled) return;
+        setKismetRunning(running);
+        if (!running) clearLive();
+      } catch {
+        if (!cancelled) {
+          setKismetRunning(false);
+          clearLive();
+        }
+      }
+    };
+
+    const fetchGps = async () => {
+      try {
+        const r = await fetch('/api/live/gps');
+        if (!r.ok) {
+          if (!cancelled) setLiveGps(null);
+          return;
+        }
+        const d = await r.json();
+        if (!cancelled) {
+          setLiveGps(d);
+          writeCache(CACHE_KEYS.GPS, d);
+        }
+      } catch {
+        if (!cancelled) setLiveGps(null);
+      }
+    };
+
+    const fetchDevices = async () => {
+      try {
+        const r = await fetch('/api/live/events/recent?limit=1000');
+        if (!r.ok) {
+          clearLive();
+          return;
+        }
+        const data = await r.json();
+
+        let raw = [];
+        if (Array.isArray(data)) raw = data;
+        else if (data.events) raw = data.events;
+        else if (data.data) raw = data.data;
+
+        if (raw.length === 0) {
+          clearLive();
+          return;
+        }
+
+        const now = Date.now();
+
+        // Dedupe by BSSID, keep strongest
+        const byId = {};
+        raw.forEach((dev) => {
+          const bssid = dev.bssid || '00:00:00:00:00:00';
+          const signal = dev.signal ?? -60;
+          const prev = byId[bssid];
+          if (!prev || signal > prev.signal) {
+            byId[bssid] = { ...dev, bssid, signal };
+          }
+        });
+
+        const seenBssids = new Set();
+
+        const mapped = Object.values(byId).map((dev) => {
+          seenBssids.add(dev.bssid);
+
+          const arr = historyRef.current[dev.bssid] || [];
+          arr.push({ t: now, signal: dev.signal });
+          historyRef.current[dev.bssid] = arr.filter(
+            (p) => now - p.t <= HISTORY_WINDOW_MS
+          );
+
+          const lat = dev.data?.lat ?? dev.lat ?? liveGps?.lat ?? null;
+          const lon = dev.data?.lon ?? dev.lon ?? liveGps?.lon ?? null;
+
+          return {
+            id: dev.bssid,
+            ssid: dev.essid || dev.ssid || 'Unknown',
+            bssid: dev.bssid,
+            signal: dev.signal,
+            band: getBand(dev.channel),
+            channel: dev.channel || 1,
+            encryption: dev.security || dev.data?.security || 'Unknown',
+            manufacturer: dev.vendor || dev.data?.vendor || 'Unknown',
+            location: formatGps(lat, lon),
+            lat,
+            lon,
+            signalHistory: historyRef.current[dev.bssid].map((p) => p.signal),
+          };
+        });
+
+        // Prune history for disappeared BSSIDs
+        Object.keys(historyRef.current).forEach((bssid) => {
+          if (!seenBssids.has(bssid)) delete historyRef.current[bssid];
+        });
+
+        // Hard cap on total tracked BSSIDs
+        const histKeys = Object.keys(historyRef.current);
+        if (histKeys.length > MAX_HISTORY_ENTRIES) {
+          histKeys
+            .slice(0, histKeys.length - MAX_HISTORY_ENTRIES)
+            .forEach((k) => delete historyRef.current[k]);
+        }
+
+        mapped.sort((a, b) => b.signal - a.signal);
+        const capped = mapped.slice(0, MAX_EMITTERS);
+
+        // Skip setState if nothing meaningful changed
+        const signature = capped.map((d) => `${d.id}|${d.signal}`).join(',');
+        if (signature === lastSignatureRef.current) return;
+        lastSignatureRef.current = signature;
+
+        if (!cancelled) {
+          setLiveDevices(capped);
+          writeCache(CACHE_KEYS.DEVICES, capped);
+          writeCache(CACHE_KEYS.LAST_FETCH, Date.now());
+        }
+      } catch (e) {
+        console.error('SignalMapView fetch failed', e);
+        clearLive();
+      }
+    };
+
+    fetchStatus();
+    fetchGps();
+    fetchDevices();
+
+    const statusT = setInterval(fetchStatus, POLL_STATUS_MS);
+    const gpsT = setInterval(fetchGps, POLL_GPS_MS);
+    const deviceT = setInterval(fetchDevices, POLL_DEVICES_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(statusT);
+      clearInterval(gpsT);
+      clearInterval(deviceT);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [networksProp]);
+
+  // Wipe when kismet stops
+  useEffect(() => {
+    if (networksProp !== undefined) return;
+    if (!kismetRunning) {
+      historyRef.current = {};
+      lastSignatureRef.current = '';
+      setLiveDevices([]);
+      setSelectedNetId('');
+      try {
+        localStorage.removeItem(CACHE_KEYS.DEVICES);
+      } catch {}
+    }
+  }, [kismetRunning, networksProp]);
+
+  // ─── Derived values ───
+  const networks = networksProp !== undefined ? networksProp : liveDevices;
+  const gpsEnabled = gpsEnabledProp ?? !!liveGps;
+  const bandFilter = bandFilterProp ?? liveBandFilter;
+  const handleBandFilterChange = onBandFilterChange ?? setLiveBandFilter;
+
+  const filteredNetworks = useMemo(
+    () =>
+      bandFilter === 'Both'
+        ? networks
+        : networks.filter((n) => n.band === bandFilter),
+    [networks, bandFilter]
+  );
+
+  // ─── Memoized layout map: id → { x, y, pingDelayS } ───
+  const layoutMap = useMemo(() => {
+    const map = new Map();
+    networks.forEach((net, idx) => {
+      const distanceRatio = Math.min(
+        0.85,
+        Math.max(0.18, (Math.abs(net.signal) - 42) / 55)
+      );
+      const angle = (idx * 137.5 + 35) * (Math.PI / 180);
+      const x = 50 + Math.cos(angle) * (distanceRatio * 42);
+      const y = 50 + Math.sin(angle) * (distanceRatio * 42);
+      const angleDeg = (idx * 137.5 + 35) % 360;
+      const nodeCompass = (angleDeg + 90) % 360;
+      const pingDelayS = (nodeCompass / 360) * sweepPeriod;
+      map.set(net.id, { x, y, pingDelayS });
+    });
+    return map;
+  }, [networks, sweepPeriod]);
+
+  const selectedNet = useMemo(
+    () =>
+      filteredNetworks.find((n) => n.id === selectedNetId) ||
+      filteredNetworks[0],
+    [filteredNetworks, selectedNetId]
+  );
+
+  // Selection sync
+  useEffect(() => {
+    if (filteredNetworks.length === 0) {
+      if (selectedNetId !== '') setSelectedNetId('');
+      return;
+    }
+    if (!filteredNetworks.some((n) => n.id === selectedNetId)) {
+      setSelectedNetId(filteredNetworks[0].id);
+    }
+  }, [filteredNetworks, selectedNetId]);
+
+  // ─── Fullscreen API ───
   useEffect(() => {
     const handleFullScreenChange = () => {
       if (!document.fullscreenElement && isFullScreen) {
@@ -85,7 +443,7 @@ const SignalMapView = ({
     };
   }, [isFullScreen]);
 
-  const handleToggleFullScreen = () => {
+  const handleToggleFullScreen = useCallback(() => {
     setIsFullScreen((prev) => {
       const next = !prev;
       if (next) {
@@ -95,106 +453,106 @@ const SignalMapView = ({
       }
       return next;
     });
-  };
-
-  // ─── Radar sweep animation ───
-  useEffect(() => {
-    if (!isRadarActive) return;
-    const stepMs = 50;
-    const degreesPerTick = fastSweep
-      ? (360 / 2000) * stepMs
-      : (360 / 4000) * stepMs;
-    const timer = setInterval(() => {
-      setSweepAngle((prev) => (prev + degreesPerTick) % 360);
-    }, stepMs);
-    return () => clearInterval(timer);
-  }, [isRadarActive, fastSweep]);
+  }, []);
 
   // ─── Zoom handlers ───
-  const handleZoomIn = () => {
-    setZoomLevel((prev) => Math.min(MAX_ZOOM, Number((prev + ZOOM_STEP).toFixed(2))));
-  };
+  const handleZoomIn = useCallback(() => {
+    setZoomLevel((prev) =>
+      Math.min(MAX_ZOOM, Number((prev + ZOOM_STEP).toFixed(2)))
+    );
+  }, []);
 
-  const handleZoomOut = () => {
+  const handleZoomOut = useCallback(() => {
     setZoomLevel((prev) => {
       const next = Math.max(MIN_ZOOM, Number((prev - ZOOM_STEP).toFixed(2)));
       if (next <= 1) setPanOffset({ x: 0, y: 0 });
       return next;
     });
-  };
+  }, []);
 
-  const handleResetZoom = () => {
+  const handleResetZoom = useCallback(() => {
     setZoomLevel(1);
     setPanOffset({ x: 0, y: 0 });
-  };
+  }, []);
 
-  const handleWheelZoom = (e) => {
-    e.preventDefault();
-    if (e.deltaY < 0) {
-      handleZoomIn();
-    } else if (e.deltaY > 0) {
-      handleZoomOut();
-    }
-  };
+  const handleWheelZoom = useCallback(
+    (e) => {
+      e.preventDefault();
+      if (e.deltaY < 0) handleZoomIn();
+      else if (e.deltaY > 0) handleZoomOut();
+    },
+    [handleZoomIn, handleZoomOut]
+  );
 
   // ─── Drag to pan ───
-  const handleMouseDown = (e) => {
-    if (e.target.closest('button')) return;
-    setIsDragging(true);
-    dragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      panX: panOffset.x,
-      panY: panOffset.y,
-    };
-  };
+  const handleMouseDown = useCallback(
+    (e) => {
+      if (e.target.closest('button')) return;
+      setIsDragging(true);
+      dragStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: panOffset.x,
+        panY: panOffset.y,
+      };
+    },
+    [panOffset.x, panOffset.y]
+  );
 
-  const handleMouseMove = (e) => {
-    if (!isDragging || !dragStartRef.current) return;
-    const dx = e.clientX - dragStartRef.current.x;
-    const dy = e.clientY - dragStartRef.current.y;
-    const maxPan = Math.max(40, (zoomLevel - 0.5) * 140);
-    setPanOffset({
-      x: Math.max(-maxPan, Math.min(maxPan, dragStartRef.current.panX + dx)),
-      y: Math.max(-maxPan, Math.min(maxPan, dragStartRef.current.panY + dy)),
-    });
-  };
+  const handleMouseMove = useCallback(
+    (e) => {
+      if (!isDragging || !dragStartRef.current) return;
+      const dx = e.clientX - dragStartRef.current.x;
+      const dy = e.clientY - dragStartRef.current.y;
+      const maxPan = Math.max(40, (zoomLevel - 0.5) * 140);
+      setPanOffset({
+        x: Math.max(-maxPan, Math.min(maxPan, dragStartRef.current.panX + dx)),
+        y: Math.max(-maxPan, Math.min(maxPan, dragStartRef.current.panY + dy)),
+      });
+    },
+    [isDragging, zoomLevel]
+  );
 
-  const handleMouseUp = () => {
+  const handleMouseUp = useCallback(() => {
     setIsDragging(false);
     dragStartRef.current = null;
-  };
+  }, []);
 
-  const handleFocusSelected = () => {
+  // ─── Focus selected (uses memoized layout) ───
+  const handleFocusSelected = useCallback(() => {
     if (!selectedNet) return;
-    const idx = networks.findIndex((n) => n.id === selectedNet.id);
-    if (idx === -1) return;
-    const { x, y } = getRadarCoords(idx, selectedNet.signal);
+    const pos = layoutMap.get(selectedNet.id);
+    if (!pos) return;
     const targetZoom = Math.max(zoomLevel, 1.75);
     setZoomLevel(targetZoom);
     setPanOffset({
-      x: (50 - x) * 2.8,
-      y: (50 - y) * 2.8,
+      x: (50 - pos.x) * 2.8,
+      y: (50 - pos.y) * 2.8,
     });
-  };
+  }, [selectedNet, layoutMap, zoomLevel]);
 
-  const getRadarCoords = (index, signal) => {
-    const distanceRatio = Math.min(
-      0.85,
-      Math.max(0.18, (Math.abs(signal) - 42) / 55)
+  // ─── Selection handler (stable) ───
+  const handleSelectNet = useCallback((id) => {
+    setSelectedNetId(id);
+  }, []);
+
+  // ─── Selected net line (only when relevant) ───
+  const selectedLine = useMemo(() => {
+    if (!selectedNet) return null;
+    const pos = layoutMap.get(selectedNet.id);
+    if (!pos) return null;
+    return (
+      <line
+        x1="50"
+        y1="50"
+        x2={pos.x}
+        y2={pos.y}
+        stroke="#059669"
+        strokeWidth="0.4"
+        strokeDasharray="1.2 0.8"
+      />
     );
-    const angle = (index * 137.5 + 35) * (Math.PI / 180);
-    const x = 50 + Math.cos(angle) * (distanceRatio * 42);
-    const y = 50 + Math.sin(angle) * (distanceRatio * 42);
-    return { x, y };
-  };
-
-  const isNodePingedByBeam = (nodeAngleDeg) => {
-    if (!isRadarActive) return false;
-    const nodeCompass = (nodeAngleDeg + 90) % 360;
-    const diff = (sweepAngle - nodeCompass + 360) % 360;
-    return diff >= 0 && diff <= 48;
-  };
+  }, [selectedNet, layoutMap]);
 
   return (
     <Box
@@ -265,7 +623,9 @@ const SignalMapView = ({
                   bgcolor: isRadarActive ? 'primary.main' : '#cbd5e1',
                   display: 'inline-block',
                   flexShrink: 0,
-                  ...(isRadarActive && { animation: 'active-dot-pulse 1.5s infinite' }),
+                  ...(isRadarActive && {
+                    animation: 'active-dot-pulse 1.5s infinite',
+                  }),
                 }}
               />
               Geospatial Signal Topology
@@ -292,13 +652,12 @@ const SignalMapView = ({
               sx={{ mt: 0.5, display: 'block' }}
             >
               Relative RSSI strength around monitoring station. Distance from
-              center = signal strength.
+              center = signal strength. Hover a node for details.
             </Typography>
           </Box>
 
-          {/* Controls */}
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            {onBandFilterChange && (
+            {handleBandFilterChange && (
               <Box
                 sx={{
                   display: 'inline-flex',
@@ -312,7 +671,7 @@ const SignalMapView = ({
                   <Box
                     key={band}
                     component="button"
-                    onClick={() => onBandFilterChange(band)}
+                    onClick={() => handleBandFilterChange(band)}
                     sx={{
                       px: 1.5,
                       py: 0.75,
@@ -322,10 +681,17 @@ const SignalMapView = ({
                       border: 'none',
                       borderRight: '1px solid',
                       borderColor: 'divider',
-                      bgcolor: bandFilter === band ? 'primary.light' : 'transparent',
-                      color: bandFilter === band ? 'primary.main' : 'text.secondary',
+                      bgcolor:
+                        bandFilter === band ? 'primary.light' : 'transparent',
+                      color:
+                        bandFilter === band
+                          ? 'primary.main'
+                          : 'text.secondary',
                       '&:last-child': { borderRight: 'none' },
-                      '&:hover': { bgcolor: bandFilter === band ? 'primary.light' : '#f8fafc' },
+                      '&:hover': {
+                        bgcolor:
+                          bandFilter === band ? 'primary.light' : '#f8fafc',
+                      },
                     }}
                   >
                     {band}
@@ -374,9 +740,7 @@ const SignalMapView = ({
                 color: gpsEnabled ? 'primary.main' : '#dc2626',
                 border: '1px solid',
                 borderColor: gpsEnabled ? 'primary.main' : '#fca5a5',
-                '&:hover': {
-                  bgcolor: gpsEnabled ? '#d1fae5' : '#fee2e2',
-                },
+                '&:hover': { bgcolor: gpsEnabled ? '#d1fae5' : '#fee2e2' },
               }}
             >
               {gpsEnabled ? 'GNSS Locked' : 'No GPS'}
@@ -449,7 +813,10 @@ const SignalMapView = ({
               { label: 'Mid', color: '#f59e0b' },
               { label: 'Weak', color: '#ef4444' },
             ].map((item) => (
-              <Box key={item.label} sx={{ display: 'flex', alignItems: 'center' }}>
+              <Box
+                key={item.label}
+                sx={{ display: 'flex', alignItems: 'center' }}
+              >
                 <Box
                   sx={{
                     width: 8,
@@ -510,8 +877,24 @@ const SignalMapView = ({
 
               {isRadarActive && (
                 <>
-                  <circle cx="50" cy="50" r="42" fill="none" stroke="#10B981" strokeWidth="0.45" className="animate-radar-ring" />
-                  <circle cx="50" cy="50" r="42" fill="none" stroke="#059669" strokeWidth="0.35" className="animate-radar-ring-delayed" />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="42"
+                    fill="none"
+                    stroke="#10B981"
+                    strokeWidth="0.45"
+                    className="animate-radar-ring"
+                  />
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="42"
+                    fill="none"
+                    stroke="#059669"
+                    strokeWidth="0.35"
+                    className="animate-radar-ring-delayed"
+                  />
                 </>
               )}
 
@@ -526,15 +909,7 @@ const SignalMapView = ({
               <text x="51.2" y="22.8" fill="#64748b" fontSize="1.9" fontFamily="monospace">-75dBm</text>
               <text x="51.2" y="9.5" fill="#64748b" fontSize="1.9" fontFamily="monospace">-90dBm</text>
 
-              {selectedNet &&
-                (() => {
-                  const idx = networks.findIndex((n) => n.id === selectedNet.id);
-                  if (idx === -1) return null;
-                  const { x, y } = getRadarCoords(idx, selectedNet.signal);
-                  return (
-                    <line x1="50" y1="50" x2={x} y2={y} stroke="#059669" strokeWidth="0.4" strokeDasharray="1.2 0.8" />
-                  );
-                })()}
+              {selectedLine}
 
               {isRadarActive && (
                 <g className={fastSweep ? 'animate-radar-sweep-fast' : 'animate-radar-sweep'}>
@@ -547,113 +922,27 @@ const SignalMapView = ({
               <circle cx="50" cy="50" r="1.6" fill="#059669" stroke="#fff" strokeWidth="0.4" />
             </Box>
 
-            {/* Emitter dots */}
+            {/* Emitter dots (memoized) */}
             {filteredNetworks.map((net, idx) => {
-              const origIdx = Math.max(0, networks.findIndex((item) => item.id === net.id));
-              const coords = getRadarCoords(origIdx, net.signal);
-              const angleDeg = (origIdx * 137.5 + 35) % 360;
-              const isSelected = selectedNet?.id === net.id;
-              const isPinged = isNodePingedByBeam(angleDeg);
-              const meta = getSignalMeta(net.signal);
-              const inverseMarkerScale = Math.max(0.65, Math.min(1.2, 1 / Math.sqrt(zoomLevel)));
-
+              const pos = layoutMap.get(net.id);
+              if (!pos) return null;
               const labelBelow = idx % 2 === 0;
+              const isSelected = selectedNet?.id === net.id;
 
               return (
-                <Box
+                <EmitterDot
                   key={net.id}
-                  component="button"
-                  onClick={() => setSelectedNetId(net.id)}
-                  sx={{
-                    position: 'absolute',
-                    left: `${coords.x}%`,
-                    top: `${coords.y}%`,
-                    transform: `translate(-50%, -50%) scale(${
-                      isSelected ? inverseMarkerScale * 1.06 : inverseMarkerScale
-                    })`,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    border: 'none',
-                    bgcolor: 'transparent',
-                    p: 0,
-                    zIndex: isSelected ? 25 : 10,
-                    transition: 'transform 0.2s ease',
-                    '&:hover': {
-                      transform: `translate(-50%, -50%) scale(${inverseMarkerScale * 1.05})`,
-                      zIndex: 30,
-                    },
-                  }}
-                >
-                  {!labelBelow && (
-                    <Box
-                      sx={{
-                        mb: 0.5,
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: 1,
-                        fontSize: '0.65rem',
-                        fontFamily: 'monospace',
-                        whiteSpace: 'nowrap',
-                        border: '1px solid',
-                        bgcolor: isSelected ? 'primary.light' : 'rgba(255,255,255,0.95)',
-                        color: isSelected ? 'primary.main' : 'text.primary',
-                        borderColor: isSelected ? 'primary.main' : 'divider',
-                        fontWeight: isSelected ? 600 : 400,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      }}
-                    >
-                      {net.ssid} ({net.signal} dBm)
-                    </Box>
-                  )}
-
-                  <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14 }}>
-                    {(isPinged || isSelected) && (
-                      <Box
-                        className="animate-blip-ping"
-                        sx={{
-                          position: 'absolute',
-                          inset: -8,
-                          borderRadius: '50%',
-                          bgcolor: 'rgba(16, 185, 129, 0.4)',
-                        }}
-                      />
-                    )}
-                    <Box
-                      sx={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: '50%',
-                        bgcolor: meta.barColor,
-                        boxShadow: `0 0 5px 1.5px ${meta.barColor}ee`,
-                        position: 'relative',
-                      }}
-                    />
-                  </Box>
-
-                  {labelBelow && (
-                    <Box
-                      sx={{
-                        mt: 0.5,
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: 1,
-                        fontSize: '0.65rem',
-                        fontFamily: 'monospace',
-                        whiteSpace: 'nowrap',
-                        border: '1px solid',
-                        bgcolor: isSelected ? 'primary.light' : 'rgba(255,255,255,0.95)',
-                        color: isSelected ? 'primary.main' : 'text.primary',
-                        borderColor: isSelected ? 'primary.main' : 'divider',
-                        fontWeight: isSelected ? 600 : 400,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      }}
-                    >
-                      {net.ssid} ({net.signal} dBm)
-                    </Box>
-                  )}
-                </Box>
+                  net={net}
+                  x={pos.x}
+                  y={pos.y}
+                  pingDelayS={pos.pingDelayS}
+                  sweepPeriod={sweepPeriod}
+                  isSelected={isSelected}
+                  isRadarActive={isRadarActive}
+                  zoomLevel={zoomLevel}
+                  labelBelow={labelBelow}
+                  onSelect={handleSelectNet}
+                />
               );
             })}
           </Box>
@@ -774,7 +1063,8 @@ const SignalMapView = ({
               zIndex: 30,
             }}
           >
-            Scroll to zoom · Drag to pan{isFullScreen ? ' · Press Esc to exit' : ''}
+            Scroll to zoom · Drag to pan · Hover node for name
+            {isFullScreen ? ' · Press Esc to exit' : ''}
           </Box>
         </Box>
 
@@ -792,6 +1082,12 @@ const SignalMapView = ({
           </span>
           <span style={{ fontFamily: 'monospace' }}>
             {filteredNetworks.length} of {networks.length} emitters plotted
+            {networksProp === undefined && (
+              <>
+                {' · '}
+                {kismetRunning ? 'LIVE' : 'IDLE'}
+              </>
+            )}
           </span>
         </Box>
       </Paper>
@@ -810,7 +1106,6 @@ const SignalMapView = ({
       >
         {selectedNet ? (
           <Box>
-            {/* Header */}
             <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 2.5 }}>
               <Stack
                 direction="row"
@@ -837,7 +1132,6 @@ const SignalMapView = ({
               </Typography>
             </Box>
 
-            {/* ✅ Details — walang Signal Quality row, "Mid" nasa RSSI row, hindi bold */}
             <Box sx={{ mt: 2.5 }}>
               {[
                 { label: 'Manufacturer', value: selectedNet.manufacturer },
@@ -909,29 +1203,58 @@ const SignalMapView = ({
           </Box>
         ) : (
           <Typography variant="body2" color="text.secondary">
-            Select an emitter node on the radar map.
+            {networks.length === 0
+              ? kismetRunning
+                ? 'Waiting for scan data…'
+                : 'Start scanning in Live Operation to see emitters.'
+              : 'Select an emitter node on the radar map.'}
           </Typography>
         )}
 
-        {selectedNet && (
-          <Button
-            fullWidth
-            onClick={() => onSendToDeAuth(selectedNet)}
-            startIcon={<GppBad sx={{ fontSize: 18 }} />}
-            sx={{
-              mt: 3,
-              bgcolor: '#fef2f2',
-              color: '#b91c1c',
-              border: '1px solid #fecaca',
-              py: 1.2,
-              fontSize: '0.85rem',
-              fontWeight: 600,
-              '&:hover': { bgcolor: '#fee2e2' },
-            }}
-          >
-            Queue in DeAuth Monitor
-          </Button>
-        )}
+        {selectedNet && (() => {
+          const eligible = isDeauthEligible(selectedNet.channel);
+          return (
+            <Tooltip
+              title={
+                eligible
+                  ? `Queue ${selectedNet.ssid} in DeAuth Monitor`
+                  : `⚠️ 5 GHz not supported for deauth — only 2.4 GHz`
+              }
+            >
+              <span>
+                <Button
+                  fullWidth
+                  onClick={() => onSendToDeAuth(selectedNet)}
+                  disabled={!eligible}
+                  startIcon={
+                    eligible ? (
+                      <GppBad sx={{ fontSize: 18 }} />
+                    ) : (
+                      <Lock sx={{ fontSize: 18 }} />
+                    )
+                  }
+                  sx={{
+                    mt: 3,
+                    bgcolor: '#fef2f2',
+                    color: '#b91c1c',
+                    border: '1px solid #fecaca',
+                    py: 1.2,
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    '&:hover': { bgcolor: '#fee2e2' },
+                    '&.Mui-disabled': {
+                      bgcolor: '#f1f5f9',
+                      color: '#94a3b8',
+                      border: '1px solid #e2e8f0',
+                    },
+                  }}
+                >
+                  {eligible ? 'Queue in DeAuth Monitor' : 'Not Eligible (5 GHz)'}
+                </Button>
+              </span>
+            </Tooltip>
+          );
+        })()}
       </Paper>
     </Box>
   );

@@ -15,7 +15,11 @@ import {
   Tooltip,
   Typography,
   Collapse,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
+
+import MenuIcon from "@mui/icons-material/Menu";
 
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import FileUploadIcon from "@mui/icons-material/FileUpload";
@@ -82,11 +86,14 @@ function WgipLogo() {
 
 export default function MainLayout({ children }) {
   const location = useLocation();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+
   const [unreadAlerts, setUnreadAlerts] = useState(0);
-  
-  // State for expanded/collapsed menu items
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   const [expandedMenus, setExpandedMenus] = useState({
-    Monitoring: true, // Monitoring is expanded by default
+    Monitoring: true,
   });
 
   useEffect(() => {
@@ -106,14 +113,21 @@ export default function MainLayout({ children }) {
     loadUnreadAlerts();
   }, []);
 
+  // Close the mobile drawer whenever the route changes
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Close mobile drawer when switching back to desktop
+  useEffect(() => {
+    if (!isMobile) setMobileOpen(false);
+  }, [isMobile]);
+
   const userName = currentUser?.name || "Admin";
 
-  // Check if any child path is active
-  const isChildActive = (children) => {
-    return children.some((child) => location.pathname === child.path);
-  };
+  const isChildActive = (children) =>
+    children.some((child) => location.pathname === child.path);
 
-  // Toggle expand/collapse
   const handleToggle = (label) => {
     setExpandedMenus((prev) => ({
       ...prev,
@@ -121,11 +135,212 @@ export default function MainLayout({ children }) {
     }));
   };
 
+  const handleDrawerToggle = () => setMobileOpen((prev) => !prev);
+
+  const drawerContent = (
+    <>
+      <Box
+        sx={{
+          height: 64,
+          px: 2,
+          display: "flex",
+          alignItems: "center",
+          borderBottom: "1px solid #e5e7eb",
+        }}
+      >
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <WgipLogo />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                fontSize: 19,
+                fontWeight: 800,
+                lineHeight: 1.05,
+                letterSpacing: "-0.025em",
+                color: "#0f172a",
+              }}
+            >
+              WGIP
+            </Typography>
+            <Typography
+              sx={{
+                mt: 0.25,
+                fontSize: 12.6,
+                fontWeight: 400,
+                lineHeight: 1.2,
+                color: "#475569",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Wireless Intelligence
+            </Typography>
+          </Box>
+        </Stack>
+      </Box>
+
+      <List sx={{ px: 1.5, py: 1.5 }}>
+        {menuItems.map((item) => {
+          if (item.children) {
+            const isExpanded = expandedMenus[item.label] || false;
+            const hasActiveChild = isChildActive(item.children);
+
+            return (
+              <Box key={item.label}>
+                <ListItemButton
+                  onClick={() => handleToggle(item.label)}
+                  sx={{
+                    mb: 0.35,
+                    minHeight: 42,
+                    px: 1.4,
+                    borderRadius: 2,
+                    color: hasActiveChild ? "#087443" : "#4b5563",
+                    bgcolor: hasActiveChild ? "#e8f5ee" : "transparent",
+                    "& .MuiListItemIcon-root": { minWidth: 36, color: "inherit" },
+                    "& .MuiSvgIcon-root": { fontSize: 20 },
+                    "& .MuiListItemText-primary": {
+                      fontSize: 14,
+                      fontWeight: hasActiveChild ? 700 : 500,
+                    },
+                    "&:hover": { bgcolor: "#f3f4f6", color: "#111827" },
+                  }}
+                >
+                  <ListItemIcon>{item.icon}</ListItemIcon>
+                  <ListItemText primary={item.label} />
+                  {isExpanded ? <ExpandLess /> : <ExpandMore />}
+                </ListItemButton>
+
+                <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                  <List component="div" disablePadding>
+                    {item.children.map((child) => {
+                      const isActive = location.pathname === child.path;
+                      return (
+                        <ListItemButton
+                          key={child.path}
+                          component={NavLink}
+                          to={child.path}
+                          sx={{
+                            mb: 0.25,
+                            minHeight: 38,
+                            pl: 4.8,
+                            pr: 1.4,
+                            py: 0.6,
+                            borderRadius: 2,
+                            color: isActive ? "#087443" : "#4b5563",
+                            bgcolor: isActive ? "#e8f5ee" : "transparent",
+                            "& .MuiListItemIcon-root": { minWidth: 32, color: "inherit" },
+                            "& .MuiSvgIcon-root": { fontSize: 18 },
+                            "& .MuiListItemText-primary": {
+                              fontSize: 13.5,
+                              fontWeight: isActive ? 700 : 400,
+                            },
+                            "&:hover": { bgcolor: "#f3f4f6", color: "#111827" },
+                          }}
+                        >
+                          {child.icon && <ListItemIcon>{child.icon}</ListItemIcon>}
+                          <ListItemText primary={child.label} />
+                        </ListItemButton>
+                      );
+                    })}
+                  </List>
+                </Collapse>
+              </Box>
+            );
+          }
+
+          const isActive = location.pathname === item.path;
+          return (
+            <ListItemButton
+              key={item.path}
+              component={NavLink}
+              to={item.path}
+              end={item.path === "/"}
+              sx={{
+                mb: 0.35,
+                minHeight: 42,
+                px: 1.4,
+                borderRadius: 2,
+                color: isActive ? "#087443" : "#4b5563",
+                bgcolor: isActive ? "#e8f5ee" : "transparent",
+                "& .MuiListItemIcon-root": { minWidth: 36, color: "inherit" },
+                "& .MuiSvgIcon-root": { fontSize: 20 },
+                "& .MuiListItemText-primary": {
+                  fontSize: 14,
+                  fontWeight: isActive ? 700 : 500,
+                },
+                "&:hover": { bgcolor: "#f3f4f6", color: "#111827" },
+              }}
+            >
+              <ListItemIcon>{item.icon}</ListItemIcon>
+              <ListItemText primary={item.label} />
+            </ListItemButton>
+          );
+        })}
+      </List>
+
+      <Box sx={{ flexGrow: 1 }} />
+
+      <Box sx={{ px: 2, pb: 2 }}>
+        <Box
+          sx={{
+            px: 1.5,
+            py: 1.2,
+            borderRadius: 2.5,
+            bgcolor: "#f8fafc",
+            border: "1px solid #e5e7eb",
+          }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                bgcolor: "#22c55e",
+                boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.12)",
+              }}
+            />
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+                Operational
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 400 }}>
+                Authorized analysis only
+              </Typography>
+            </Box>
+          </Stack>
+        </Box>
+      </Box>
+    </>
+  );
+
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "#f7f8fa" }}>
+      {/* Mobile hamburger drawer */}
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={handleDrawerToggle}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          display: { xs: "block", md: "none" },
+          "& .MuiDrawer-paper": {
+            width: drawerWidth,
+            boxSizing: "border-box",
+            bgcolor: "#ffffff",
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
+      >
+        {drawerContent}
+      </Drawer>
+
+      {/* Desktop permanent drawer */}
       <Drawer
         variant="permanent"
+        open
         sx={{
+          display: { xs: "none", md: "block" },
           width: drawerWidth,
           flexShrink: 0,
           "& .MuiDrawer-paper": {
@@ -133,227 +348,12 @@ export default function MainLayout({ children }) {
             boxSizing: "border-box",
             borderRight: "1px solid #e5e7eb",
             bgcolor: "#ffffff",
+            display: "flex",
+            flexDirection: "column",
           },
         }}
       >
-        <Box
-          sx={{
-            height: 64,
-            px: 2,
-            display: "flex",
-            alignItems: "center",
-            borderBottom: "1px solid #e5e7eb",
-          }}
-        >
-          <Stack direction="row" spacing={1.25} alignItems="center">
-            <WgipLogo />
-            <Box sx={{ minWidth: 0 }}>
-              <Typography
-                sx={{
-                  fontSize: 19,
-                  fontWeight: 800,
-                  lineHeight: 1.05,
-                  letterSpacing: "-0.025em",
-                  color: "#0f172a",
-                }}
-              >
-                WGIP
-              </Typography>
-              <Typography
-                sx={{
-                  mt: 0.25,
-                  fontSize: 12.6,
-                  fontWeight: 400,
-                  lineHeight: 1.2,
-                  color: "#475569",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Wireless Intelligence
-              </Typography>
-            </Box>
-          </Stack>
-        </Box>
-
-        <List sx={{ px: 1.5, py: 1.5 }}>
-          {menuItems.map((item) => {
-            // Check if item has children (nested menu)
-            if (item.children) {
-              const isExpanded = expandedMenus[item.label] || false;
-              const hasActiveChild = isChildActive(item.children);
-
-              return (
-                <Box key={item.label}>
-                  <ListItemButton
-                    onClick={() => handleToggle(item.label)}
-                    sx={{
-                      mb: 0.35,
-                      minHeight: 42,
-                      px: 1.4,
-                      borderRadius: 2,
-                      color: hasActiveChild ? "#087443" : "#4b5563",
-                      bgcolor: hasActiveChild ? "#e8f5ee" : "transparent",
-                      "& .MuiListItemIcon-root": {
-                        minWidth: 36,
-                        color: "inherit",
-                      },
-                      "& .MuiSvgIcon-root": {
-                        fontSize: 20,
-                      },
-                      "& .MuiListItemText-primary": {
-                        fontSize: 14,
-                        fontWeight: hasActiveChild ? 700 : 500,
-                      },
-                      "&:hover": {
-                        bgcolor: "#f3f4f6",
-                        color: "#111827",
-                      },
-                    }}
-                  >
-                    <ListItemIcon>{item.icon}</ListItemIcon>
-                    <ListItemText primary={item.label} />
-                    {isExpanded ? <ExpandLess /> : <ExpandMore />}
-                  </ListItemButton>
-
-                  <Collapse in={isExpanded} timeout="auto" unmountOnExit>
-                    <List component="div" disablePadding>
-                      {item.children.map((child) => {
-                        const isActive = location.pathname === child.path;
-                        return (
-                          <ListItemButton
-                            key={child.path}
-                            component={NavLink}
-                            to={child.path}
-                            sx={{
-                              mb: 0.25,
-                              minHeight: 38,
-                              pl: 4.8,
-                              pr: 1.4,
-                              py: 0.6,
-                              borderRadius: 2,
-                              color: isActive ? "#087443" : "#4b5563",
-                              bgcolor: isActive ? "#e8f5ee" : "transparent",
-                              "& .MuiListItemIcon-root": {
-                                minWidth: 32,
-                                color: "inherit",
-                              },
-                              "& .MuiSvgIcon-root": {
-                                fontSize: 18,
-                              },
-                              "& .MuiListItemText-primary": {
-                                fontSize: 13.5,
-                                fontWeight: isActive ? 700 : 400,
-                              },
-                              "&:hover": {
-                                bgcolor: "#f3f4f6",
-                                color: "#111827",
-                              },
-                              "&.active": {
-                                bgcolor: "#e8f5ee",
-                                color: "#087443",
-                              },
-                              "&.active .MuiListItemText-primary": {
-                                fontWeight: 700,
-                              },
-                            }}
-                          >
-                            {child.icon && <ListItemIcon>{child.icon}</ListItemIcon>}
-                            <ListItemText primary={child.label} />
-                          </ListItemButton>
-                        );
-                      })}
-                    </List>
-                  </Collapse>
-                </Box>
-              );
-            }
-
-            // Regular menu item (no children)
-            const isActive = location.pathname === item.path;
-            return (
-              <ListItemButton
-                key={item.path}
-                component={NavLink}
-                to={item.path}
-                end={item.path === "/"}
-                sx={{
-                  mb: 0.35,
-                  minHeight: 42,
-                  px: 1.4,
-                  borderRadius: 2,
-                  color: isActive ? "#087443" : "#4b5563",
-                  bgcolor: isActive ? "#e8f5ee" : "transparent",
-                  "& .MuiListItemIcon-root": {
-                    minWidth: 36,
-                    color: "inherit",
-                  },
-                  "& .MuiSvgIcon-root": {
-                    fontSize: 20,
-                  },
-                  "& .MuiListItemText-primary": {
-                    fontSize: 14,
-                    fontWeight: isActive ? 700 : 500,
-                  },
-                  "&:hover": {
-                    bgcolor: "#f3f4f6",
-                    color: "#111827",
-                  },
-                  "&.active": {
-                    bgcolor: "#e8f5ee",
-                    color: "#087443",
-                  },
-                  "&.active .MuiListItemText-primary": {
-                    fontWeight: 700,
-                  },
-                }}
-              >
-                <ListItemIcon>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.label} />
-              </ListItemButton>
-            );
-          })}
-        </List>
-
-        <Box sx={{ flexGrow: 1 }} />
-
-        <Box sx={{ px: 2, pb: 2 }}>
-          <Box
-            sx={{
-              px: 1.5,
-              py: 1.2,
-              borderRadius: 2.5,
-              bgcolor: "#f8fafc",
-              border: "1px solid #e5e7eb",
-            }}
-          >
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: "#22c55e",
-                  boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.12)",
-                }}
-              />
-              <Box>
-                <Typography
-                  variant="body2"
-                  sx={{ fontWeight: 600, lineHeight: 1.2 }}
-                >
-                  Operational
-                </Typography>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ fontWeight: 400 }}
-                >
-                  Authorized analysis only
-                </Typography>
-              </Box>
-            </Stack>
-          </Box>
-        </Box>
+        {drawerContent}
       </Drawer>
 
       <Box
@@ -368,7 +368,7 @@ export default function MainLayout({ children }) {
           component="header"
           sx={{
             height: 64,
-            px: 3,
+            px: { xs: 2, md: 3 },
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -379,17 +379,32 @@ export default function MainLayout({ children }) {
             zIndex: 20,
           }}
         >
-          <Typography
-            sx={{
-              fontSize: 16,
-              fontWeight: 700,
-              lineHeight: 1,
-              letterSpacing: "-0.01em",
-              color: "#111827",
-            }}
-          >
-            Wireless Geospatial Intelligence Platform
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+            {isMobile && (
+              <IconButton
+                onClick={handleDrawerToggle}
+                edge="start"
+                aria-label="open navigation"
+                sx={{ ml: -0.5 }}
+              >
+                <MenuIcon />
+              </IconButton>
+            )}
+            <Typography
+              sx={{
+                fontSize: { xs: 14, md: 16 },
+                fontWeight: 700,
+                lineHeight: 1,
+                letterSpacing: "-0.01em",
+                color: "#111827",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Wireless Geospatial Intelligence Platform
+            </Typography>
+          </Stack>
 
           <Stack direction="row" spacing={1.2} alignItems="center">
             <Tooltip title="Review Notifications">
@@ -402,9 +417,7 @@ export default function MainLayout({ children }) {
                   height: 38,
                   border: "1px solid #e5e7eb",
                   bgcolor: "#ffffff",
-                  "&:hover": {
-                    bgcolor: "#f8fafc",
-                  },
+                  "&:hover": { bgcolor: "#f8fafc" },
                 }}
               >
                 <Badge badgeContent={unreadAlerts} color="error" max={99}>
@@ -437,19 +450,14 @@ export default function MainLayout({ children }) {
               >
                 {userName.charAt(0).toUpperCase()}
               </Avatar>
-              <Box
-                sx={{
-                  height: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                }}
-              >
+              <Box sx={{ height: "100%", display: "flex", alignItems: "center" }}>
                 <Typography
                   sx={{
                     fontSize: 14,
                     fontWeight: 600,
                     lineHeight: 1,
                     color: "#111827",
+                    display: { xs: "none", sm: "block" },
                   }}
                 >
                   {userName}
@@ -464,7 +472,7 @@ export default function MainLayout({ children }) {
           sx={{
             flexGrow: 1,
             minWidth: 0,
-            px: 3,
+            px: { xs: 2, md: 3 },
             py: 2.5,
           }}
         >

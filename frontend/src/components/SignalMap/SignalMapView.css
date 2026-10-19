@@ -1,74 +1,73 @@
-/* src/components/SignalMap/SignalMapView.css */
-
-/* ─── Radar Sweep Animation ─── */
-@keyframes radar-sweep {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* ─── Emitter dot (plain, no MUI) ─── */
+.emitter-dot {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  padding: 0;
+  z-index: 10;
+  transition: transform 0.2s ease;
+  will-change: transform;
+}
+.emitter-dot:hover {
+  z-index: 30;
 }
 
-.animate-radar-sweep {
-  animation: radar-sweep 4s linear infinite;
-  transform-origin: 50px 50px;
+.emitter-dot.is-selected {
+  z-index: 25;
 }
 
-.animate-radar-sweep-fast {
-  animation: radar-sweep 2s linear infinite;
-  transform-origin: 50px 50px;
+.emitter-label {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-family: monospace;
+  white-space: nowrap;
+  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.emitter-dot:hover .emitter-label,
+.emitter-dot.is-selected .emitter-label {
+  opacity: 1;
+}
+.emitter-dot.is-selected .emitter-label {
+  background: #d1fae5;
+  color: #059669;
+  border-color: #059669;
+  font-weight: 600;
 }
 
-/* ─── Sonar Ring Animation ─── */
-@keyframes radar-ring {
-  0% {
-    transform: scale(0.3);
-    opacity: 0.8;
-  }
-  100% {
-    transform: scale(1.2);
-    opacity: 0;
-  }
+.emitter-marker-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
 }
 
-.animate-radar-ring {
-  animation: radar-ring 2.5s ease-out infinite;
-  transform-origin: 50px 50px;
+.emitter-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  position: relative;
 }
 
-.animate-radar-ring-delayed {
-  animation: radar-ring 2.5s ease-out infinite;
-  animation-delay: 1.25s;
-  transform-origin: 50px 50px;
-}
-
-/* ─── Blip Ping Animation ─── */
-@keyframes blip-ping {
-  0% {
-    transform: scale(1);
-    opacity: 0.7;
-  }
-  75%, 100% {
-    transform: scale(2.5);
-    opacity: 0;
-  }
-}
-
-.animate-blip-ping {
+/* only selected dots get a pulse, not all of them */
+.emitter-dot.is-selected .emitter-ping,
+.emitter-dot.is-pinged .emitter-ping {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.4);
   animation: blip-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
-/* ─── Active Radar Dot Pulse ─── */
-@keyframes active-dot-pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-.animate-active-dot {
-  animation: active-dot-pulse 1.5s ease-in-out infinite;
+  pointer-events: none;
 }

@@ -33,7 +33,7 @@ import {
   useMap,
 } from "react-leaflet";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const DEFAULT_CENTER = [14.5995, 120.9842];
 const MAX_POINT_LIMIT = 5000;
 

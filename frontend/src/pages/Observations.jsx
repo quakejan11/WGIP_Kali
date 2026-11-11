@@ -29,7 +29,7 @@ import ListAltOutlinedIcon from "@mui/icons-material/ListAltOutlined";
 
 import { getManufacturer } from "../utils/wgipDisplay";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const PAGE_SIZE_OPTIONS = [10, 50, 100];
 
 const EMPTY_STATS = {

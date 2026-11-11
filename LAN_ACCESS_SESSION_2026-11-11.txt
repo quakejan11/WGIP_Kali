@@ -1,0 +1,133 @@
+WGIP LAN Access - Session Change Log (2026-11-11)
+=================================================
+
+Scope: changes made to enable the WGIP frontend to be used from other devices
+on the LAN. Server LAN IP: 192.168.0.170
+Project root: /home/enigma/Desktop/WGIP_Kali-main
+
+NOTE: This is a change log, not a test report. Ad-hoc verification results are
+listed at the bottom. There is no canonical test/build suite for the backend;
+frontend verification was manual curl-based checks plus (this morning) a noted
+npm build pass.
+
+
+MORNING CHANGE SET (frontend) — this morning's work
+---------------------------------------------------
+Goal: let LAN devices open the UI at http://192.168.0.170:3000/ without editing
+the WGIP backend (original constraint: backend stays loopback-only, unmodified).
+
+1. frontend/.env  (2026-11-11 09:11)
+   - Added: VITE_API_URL=/backend
+
+2. frontend/vite.config.js  (2026-11-11 09:12)
+   - server: port 3000, host '0.0.0.0' (Vite serves on the LAN interface).
+     Note: exact prior state not audited; recorded config as of change time.
+   - Added '/backend' proxy entry:
+       '/backend' -> target http://localhost:8000, ws: true,
+       strips the '/backend' prefix (path.slice('/backend'.length) || '/').
+   - Existing '/api' proxy entry left unchanged (targets localhost:8000,
+     passes path through as-is).
+
+3. frontend/.env-derived API base in src/services/api.js  (2026-11-11 09:13)
+   - baseURL: import.meta.env.VITE_API_URL || "/backend"
+   (previously a hardcoded base URL / "/api" style; current source confirms
+   the env-var form with "/backend" fallback)
+
+4. Migrated other hardcoded backend references across the frontend to
+   import.meta.env.VITE_API_URL with a localhost:8000 fallback, e.g.:
+     const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+   (also 'http://127.0.0.1:8000' in a few files)
+   Affected files (grep, this morning):
+     Observations.jsx, BssidHistory.jsx, ScanHistory.jsx, BSSIDProfile.jsx,
+     Dashboard.jsx, Import.jsx, ClientDeviceTimeline.jsx, TrackedDevices.jsx,
+     Settings.jsx, Map.jsx, DeviceLinkAnalysis.jsx, utils/reviewItems.js,
+     services/targetService.js, services/deauthService.ts,
+     components/scan/ScanResultMap.jsx, components/scan/ScanWifiDeviceLinks.jsx,
+     components/scan/BssidObservedDevices.jsx, components/scan/DeviceWifiConnections.jsx,
+     api/wgipClientApi.js
+   With VITE_API_URL=/backend these resolve to same-origin /backend/...
+
+5. frontend/NETWORK_ACCESS_NOTES.txt  (2026-11-11 09:13)
+   - Handoff notes for the frontend-only workaround. NOTE: one line in that
+     file is stale — it says src/services/api.js "Uses baseURL '/api'";
+     the actual baseURL is now "/backend".
+
+6. frontend/dist/* rebuilt (2026-11-11 09:13)
+   - dist/index.html and assets carry this morning's build timestamps.
+
+How the morning setup works:
+  LAN browser -> http://192.168.0.170:3000/              (Vite serves UI)
+  LAN browser -> http://192.168.0.170:3000/backend/<p>  -> Vite proxy ->
+                http://localhost:8000/<p> (backend, prefix stripped)
+  LAN browser -> http://192.168.0.170:3000/api/<p>      -> Vite proxy ->
+                http://localhost:8000/api/<p> (path unchanged)
+  Backend never sees LAN clients directly; it only sees loopback proxy traffic.
+
+
+LATER SAME DAY (backend edit, explicitly requested)
+---------------------------------------------------
+7. backend/app/main.py  (2026-11-11 18:16 / ~10:16 UTC)
+   - ONLY backend file modified.
+   - Added "http://192.168.0.170:3000" to CORSMiddleware allow_origins.
+     (Before: only localhost/127.0.0.1 entries 3000/5173-5175/8000.)
+   - Done on explicit user request ("go edit it") after the morning notes
+     documented direct cross-origin calls as unsupported.
+   - CORS does NOT affect the configured frontend path (same-origin /backend
+     via proxy needs no CORS); it only enables direct browser calls to
+     http://192.168.0.170:8000.
+
+8. Backend process state (user-launched, not started by agent):
+   - Initially launched as: python3 -m uvicorn app.main:app --reload
+     -> bound to 127.0.0.1:8000 (uvicorn default).
+   - Later relaunched by user as:
+       python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+     -> bound to 0.0.0.0:8000. --reload picked up the CORS edit automatically.
+   - Vite dev server: node vite on 0.0.0.0:3000 (pid 29048 at time of check).
+
+
+VERIFICATION (curl / ad-hoc)
+----------------------------
+- http://127.0.0.1:8000/docs                            -> 200
+- http://127.0.0.1:3000/backend/docs                    -> 200 (after backend up)
+- http://192.168.0.170:3000/                            -> 200
+- http://192.168.0.170:3000/backend/docs                -> 200
+- http://192.168.0.170:8000/docs (Origin: 192.168.0.170:3000) -> 200
+- Ad-hoc python check (deleted after run, /tmp/hermes-verify-cors.py):
+    OPTIONS preflight from LAN origin -> 200, allow-origin echoes
+      http://192.168.0.170:3000
+    GET with LAN origin -> 200 with allow-origin header
+    OPTIONS preflight from unknown origin -> 400, no allow-origin echoed
+- NOTE: NOT verified end-to-end in a real browser on another LAN device
+  (pages load, login/auth flow, Kismet/live data, WebSockets). Verification
+  was transport-level HTTP only.
+
+
+KNOWN LIMITS / PENDING ITEMS
+----------------------------
+- src/pages/KismetImportDetails.jsx line 41 hardcodes
+    const API_BASE_URL = "http://127.0.0.1:8000";
+  (mtime 2026-10-19, NOT migrated). From any LAN browser, 127.0.0.1 refers to
+  the client machine itself, so paths through that constant will fail remotely.
+  Fix would be the same env-var pattern as the rest; not done.
+- frontend/NETWORK_ACCESS_NOTES.txt stale line (see #5).
+- Backend is bound to 0.0.0.0:8000 and now CORS-allows the LAN origin, so any
+  LAN device can reach the API port directly, including capture/deauth
+  endpoints. If only the proxy path is wanted, drop --host 0.0.0.0 (frontend
+  still works via /backend) and optionally remove the CORS origin.
+- No backend test suite detected; backend verification was ad-hoc only.
+- Direct-to-backend calls remain opt-in for the frontend; VITE_API_URL=/backend
+  (proxy) is still the configured path.
+
+FILES TOUCHED (summary)
+-----------------------
+Frontend (this morning):
+  .env, vite.config.js, src/services/api.js, src/services/deauthService.ts,
+  src/services/targetService.js, src/utils/reviewItems.js, src/api/wgipClientApi.js,
+  src/pages/{Observations, BssidHistory, ScanHistory, BSSIDProfile, Dashboard,
+    Import, ClientDeviceTimeline, TrackedDevices, Settings, Map,
+    DeviceLinkAnalysis}.jsx,
+  src/components/scan/{ScanResultMap, ScanWifiDeviceLinks, BssidObservedDevices,
+    DeviceWifiConnections}.jsx,
+  NETWORK_ACCESS_NOTES.txt (new), dist/ artifacts (rebuilt)
+Backend (later, on request):
+  app/main.py (CORS allow_origins only)

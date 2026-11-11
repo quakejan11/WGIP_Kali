@@ -24,7 +24,7 @@ import DeviceHubOutlinedIcon from "@mui/icons-material/DeviceHubOutlined";
 import PlaceOutlinedIcon from "@mui/icons-material/PlaceOutlined";
 import { analyzeTrackedDevices } from "../utils/trackingRules";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function normalizeArray(data) {
   if (Array.isArray(data)) return data;

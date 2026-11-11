@@ -1,0 +1,97 @@
+WGIP Frontend Network Access Notes
+=================================
+
+PURPOSE
+-------
+Allow devices on the same LAN to use the WGIP frontend from the server's IP.
+
+Current server address: 192.168.0.170
+Frontend URL:          http://192.168.0.170:3000/
+
+IMPORTANT LIMITATION
+--------------------
+Direct browser requests to http://192.168.0.170:8000 are not supported without changing the backend:
+- The backend is bound to 127.0.0.1:8000 on the server.
+- Its CORS origin list does not include http://192.168.0.170:3000.
+
+Since the backend must remain unchanged, direct cross-origin calls to 192.168.0.170:8000 will fail.
+Verified example: an OPTIONS request with Origin http://192.168.0.170:3000 returned:
+400 Disallowed CORS origin
+
+WORKING APPROACH
+----------------
+The frontend uses a SAME-ORIGIN relative backend path and a Vite proxy forwards it to the backend:
+
+  Device browser:
+    http://192.168.0.170:3000/backend/<backend-path>
+    http://192.168.0.170:3000/api/<backend-path>
+
+  Server-side Vite proxy:
+    /backend/* -> http://localhost:8000/*
+    /api/*     -> http://localhost:8000/api/*
+
+This works because all backend calls go through the Vite server on 192.168.0.170:3000, and the
+backend only ever sees same-machine/server-side proxy connections.
+
+FILES CHANGED OR RELEVANT
+-------------------------
+.env:
+  VITE_API_URL=/backend
+
+vite.config.js:
+  server.host = '0.0.0.0'
+  server.port = 3000
+  proxy:
+    '/api'     -> http://localhost:8000, path unchanged
+    '/backend' -> http://localhost:8000, strips the '/backend' prefix
+
+src/services/api.js:
+  Uses baseURL "/api"
+
+Other API constants in the frontend were changed to:
+  import.meta.env.VITE_API_URL || "http://localhost:8000"
+
+With VITE_API_URL=/backend, these become relative requests such as:
+  /backend/kismet-imports/
+  /backend/client-observations?limit=1
+  /backend/api/targets
+
+BACKEND FILES / CODE
+--------------------
+The backend directory is NOT modified by this setup.
+The FastAPI backend still runs on 127.0.0.1:8000.
+
+TO RUN
+------
+Terminal 1 - backend (as usual; do not bind the backend publicly just for this workaround):
+  cd /home/enigma/Desktop/WGIP_Kali-main/backend
+  source .venv/bin/activate   # or the correct venv if named differently
+  python -m uvicorn app.main:app --reload
+
+Terminal 2 - frontend:
+  cd /home/enigma/Desktop/WGIP_Kali-main/frontend
+  npm run dev
+
+Open from another device on the same network:
+  http://192.168.0.170:3000/
+
+If it still uses an old hardcoded address in a browser tab, hard reload (Ctrl+F5).
+After changing .env or vite.config.js, stop and restart npm run dev.
+
+VERIFICATION DONE
+-----------------
+- npm run build passes.
+- Proxy tests returned 200 for:
+  http://localhost:3000/backend/api/live/status
+  http://localhost:3000/backend/kismet-imports/
+  http://localhost:3000/backend/client-observations?limit=1
+  http://localhost:3000/backend/api/targets
+- Vite dev server itself returns 200 for http://localhost:3000/.
+
+NOTES / TRADE-OFFS
+------------------
+- This avoids backend changes and avoids public backend binding.
+- The frontend does not call 192.168.0.170:8000 directly.
+- Requests must pass through the Vite dev-server proxy.
+- If the frontend is built for production, a separate production reverse proxy is required instead of Vite's dev proxy.
+- Existing browser console/runtime warnings in the app were not treated as part of this task.

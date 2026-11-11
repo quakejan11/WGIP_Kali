@@ -21,8 +21,8 @@ router = APIRouter(prefix="/api/live", tags=["live"])
 kismet_connector = KismetConnector()
 
 # Kismet REST API config
-KISMET_USER = "wardriving"
-KISMET_PASS = "kali"
+KISMET_USER = "enigma"
+KISMET_PASS = "011101"
 KISMET_BASE = "http://localhost:2501"
 
 # Cache for data

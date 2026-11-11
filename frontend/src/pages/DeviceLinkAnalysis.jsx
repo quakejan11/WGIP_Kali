@@ -25,7 +25,8 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import TimelineIcon from "@mui/icons-material/Timeline";
 import SearchIcon from "@mui/icons-material/Search";
-import MapIcon from "@mui/icons-material/Map";
+import MapIcon from "@mui/icons-material/Map";
+
 import DeviceWifiConnections from "../components/scan/DeviceWifiConnections";
 import { clusterDetectionsByArea, summarizeClusterMovement } from "../utils/movementClustering";
 import { analyzeTrackedDevices } from "../utils/trackingRules";
@@ -43,7 +44,7 @@ import {
   useMap,
 } from "react-leaflet";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function formatNumber(value) {
   if (value === null || value === undefined) {

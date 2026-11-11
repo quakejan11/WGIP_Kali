@@ -5,6 +5,7 @@ from typing import Optional, List
 import subprocess
 import time
 import re
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,10 +15,10 @@ from app.services.deauth_service import DeauthService
 from app.services.capture_service import capture_service
 from app.models.target import Target
 from app.schemas.deauth import (
-    DeauthRequest, 
-    BulkDeauthRequest, 
+    DeauthRequest,
+    BulkDeauthRequest,
     QueueDeauthRequest,
-    FlagDeviceRequest, 
+    FlagDeviceRequest,
     UpdateStatusRequest,
     DeauthStatus
 )
@@ -81,46 +82,97 @@ def normalize_count(count) -> int:
 
 
 def ensure_monitor_mode() -> dict:
-    """Ensure wlan2 is in monitor mode. Creates wlan2mon if it doesn't exist."""
+    """
+    Ensure wlan2 is in monitor mode WITHOUT killing NetworkManager globally.
+
+    SAFETY:
+      - Does NOT run `airmon-ng check kill` (that would disconnect the host).
+      - Refuses if wlan2 is carrying the default route.
+      - Only detaches wlan2 from NetworkManager; every other interface
+        (including wlan0 uplink, eth0, DHCP, SSH) keeps running.
+    """
     monitor_iface = MONITOR_DEAUTH_INTERFACE
     physical_iface = PHYSICAL_DEAUTH_INTERFACE
 
-    stdout, stderr, rc = run_command(f"iwconfig {monitor_iface} 2>&1")
+    # Already monitor?
+    stdout, _, rc = run_command(f"iwconfig {monitor_iface} 2>&1")
     if rc == 0 and "Mode:Monitor" in stdout:
         print(f"✅ {monitor_iface} already in monitor mode")
         return {"monitor_interface": monitor_iface, "was_created": False}
 
-    stdout, stderr, rc = run_command(f"iwconfig {physical_iface} 2>&1")
+    stdout, _, rc = run_command(f"iwconfig {physical_iface} 2>&1")
     if rc == 0 and "Mode:Monitor" in stdout:
         print(f"✅ {physical_iface} already in monitor mode")
         return {"monitor_interface": physical_iface, "was_created": False}
 
-    print(f"🔧 Enabling monitor mode on {physical_iface}...")
-    run_command("sudo airmon-ng check kill")
+    # Safety: refuse if the deauth adapter is the default route
+    default_routes, _, _ = run_command("ip route show default")
+    if physical_iface in default_routes:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"{physical_iface} is carrying the default route. "
+                f"Refusing to put it in monitor mode — would disconnect the host."
+            ),
+        )
 
+    if not os.path.isdir(f"/sys/class/net/{physical_iface}"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"{physical_iface} does not exist on this system."
+        )
+
+    print(f"🔧 Enabling monitor mode on {physical_iface} (scoped, non-destructive)")
+
+    # Report (but do NOT kill) interfering processes
+    stdout, _, _ = run_command("sudo airmon-ng check 2>&1")
+    if stdout:
+        print(f"⚠️ airmon-ng check:\n{stdout}")
+
+    # Detach ONLY wlan2 from NetworkManager / wpa_supplicant.
+    # Everything else (uplink, DHCP, SSH) stays up.
+    run_command(f"sudo nmcli device set {physical_iface} managed no")
+    run_command(f"sudo systemctl stop wpa_supplicant@{physical_iface} 2>/dev/null || true")
+
+    # Try airmon-ng start (safe now that only wlan2 is detached)
     stdout, stderr, rc = run_command(f"sudo airmon-ng start {physical_iface}")
     print(f"airmon-ng output: {stdout}")
     print(f"airmon-ng errors: {stderr}")
 
-    if rc != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to enable monitor mode on {physical_iface}: {stderr or stdout}"
+    for candidate in (monitor_iface, f"{physical_iface}mon", physical_iface):
+        out, _, rc2 = run_command(f"iwconfig {candidate} 2>&1")
+        if rc2 == 0 and "Mode:Monitor" in out:
+            print(f"✅ Monitor mode enabled: {candidate}")
+            return {"monitor_interface": candidate, "was_created": True}
+
+    # Fallback: create monitor interface directly via iw from wlan2's phy
+    phy = None
+    out, _, _ = run_command("ls /sys/class/ieee80211/")
+    for p in out.split():
+        if os.path.isdir(f"/sys/class/ieee80211/{p}/device/net/{physical_iface}"):
+            phy = p
+            break
+
+    if phy:
+        print(f"🔧 Creating {monitor_iface} from {phy} via iw")
+        run_command(f"sudo ip link set {physical_iface} down")
+        stdout, stderr, rc = run_command(
+            f"sudo iw phy {phy} interface add {monitor_iface} type monitor"
         )
-
-    stdout, stderr, rc = run_command(f"iwconfig {monitor_iface} 2>&1")
-    if rc == 0 and "Mode:Monitor" in stdout:
-        print(f"✅ Monitor mode enabled: {monitor_iface}")
-        return {"monitor_interface": monitor_iface, "was_created": True}
-
-    stdout, stderr, rc = run_command(f"iwconfig {physical_iface} 2>&1")
-    if rc == 0 and "Mode:Monitor" in stdout:
-        print(f"✅ Monitor mode enabled: {physical_iface}")
-        return {"monitor_interface": physical_iface, "was_created": True}
+        print(f"iw add rc={rc} stdout={stdout} stderr={stderr}")
+        run_command(f"sudo ip link set {monitor_iface} up")
+        time.sleep(0.5)
+        out, _, rc2 = run_command(f"iwconfig {monitor_iface} 2>&1")
+        if rc2 == 0 and "Mode:Monitor" in out:
+            print(f"✅ {monitor_iface} created via iw")
+            return {"monitor_interface": monitor_iface, "was_created": True}
 
     raise HTTPException(
         status_code=500,
-        detail=f"Monitor interface not found after airmon-ng start {physical_iface}"
+        detail=(
+            f"Could not create monitor mode on {physical_iface}. "
+            f"Check `iw phy <phy> info | grep monitor` and `dmesg | tail`."
+        ),
     )
 
 
@@ -143,7 +195,7 @@ def run_deauth_attack(bssid: str, interface: str, channel: int, client_mac: Opti
         print(f"🛠️ Command: {cmd}")
 
         if count == 0:
-            # ⬇️ Continuous deauth → write output to a log file
+            # Continuous deauth → write output to a log file
             deauth_log_dir = Path(__file__).parent.parent.parent / "captures" / "logs"
             deauth_log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,7 +213,7 @@ def run_deauth_attack(bssid: str, interface: str, channel: int, client_mac: Opti
                 stdin=subprocess.DEVNULL,
             )
 
-            # ⬇️ Verify it's actually running (not crashed immediately)
+            # Verify it's actually running (not crashed immediately)
             time.sleep(2)
             if process.poll() is not None:
                 log_handle.close()
@@ -202,7 +254,7 @@ def run_deauth_attack(bssid: str, interface: str, channel: int, client_mac: Opti
                     print(f"⚠️ DB update skipped: {e}")
 
         else:
-            # ⬇️ One-shot deauth → wait for it to complete
+            # One-shot deauth → wait for it to complete
             process = subprocess.run(
                 cmd.split(),
                 stdout=subprocess.PIPE,
@@ -330,7 +382,7 @@ async def execute_deauth(
     interface = monitor_iface
     target_channel = request.channel or 1
 
-    # ⬇️ CRITICAL FIX: Set channel ONCE, before airodump/aireplay start
+    # Set channel ONCE, before airodump/aireplay start
     print(f"📡 Setting channel {target_channel} on {interface} (before attack starts)...")
     channel_ok = set_interface_channel(interface, target_channel)
     if channel_ok:
@@ -364,7 +416,7 @@ async def execute_deauth(
         except Exception as e:
             print(f"❌ Failed to start capture: {e}")
 
-    # ⬇️ Delay so airodump has locked the channel before aireplay starts
+    # Delay so airodump has locked the channel before aireplay starts
     if capture_info:
         time.sleep(1.5)
 
@@ -441,7 +493,6 @@ async def bulk_execute_deauth(
     interface = result["monitor_interface"]
     target_channel = request.channel or 1
 
-    # ⬇️ Set channel once before any attack
     set_interface_channel(interface, target_channel)
     time.sleep(1)
 
@@ -585,7 +636,6 @@ async def deauth_ap(
     interface = result["monitor_interface"]
     target_channel = request.channel or 1
 
-    # ⬇️ Set channel once before any attack
     set_interface_channel(interface, target_channel)
     time.sleep(1)
 
